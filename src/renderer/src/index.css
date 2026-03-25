@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── 다크 테마 (기본) — 스크린샷 베이스 재구성 ─────────────────────── */
+:root {
+  --bg-dark:     28 28 30;        /* #1c1c1e — macOS-dark 베이스 */
+  --bg-card:     44 44 46;        /* #2c2c2e — 카드 */
+  --bg-deep:     58 58 60;        /* #3a3a3c — 경계/입력 */
+  --accent:      255 69 58;       /* #ff453a — 시스템 레드 */
+  --muted:       174 174 178;     /* #aeaeb2 — 2차 텍스트 */
+  --subtle:      99 99 102;       /* #636366 — 3차 텍스트 */
+  --text-primary:242 242 247;     /* #f2f2f7 — 주 텍스트 */
+}
+
+/* ── 라이트 테마 ──────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg-dark:     248 249 250;     /* #f8f9fa */
+  --bg-card:     255 255 255;     /* #ffffff */
+  --bg-deep:     233 236 239;     /* #e9ecef */
+  --accent:      220 53 69;       /* #dc3545 */
+  --muted:       73 80 87;        /* #495057 */
+  --subtle:      108 117 125;     /* #6c757d */
+  --text-primary:33 37 41;        /* #212529 */
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  background: rgb(var(--bg-dark));
+  color: rgb(var(--text-primary));
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  overflow: hidden;
+  transition: background 0.2s, color 0.2s;
+}
+
+/* ── 스크롤바 ────────────────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: rgb(var(--bg-deep)); }
+::-webkit-scrollbar-thumb  { background: rgb(var(--muted)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--accent)); }
+
+/* ── Electron 드래그 영역 ────────────────────────────────────────── */
+.drag-region { -webkit-app-region: drag; }
+.no-drag     { -webkit-app-region: no-drag; }
