@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useAppStore } from '../store/appStore'
 import { useTheme } from '../hooks/useTheme'
-import { SavedCharacter } from '../types'
+import { ClassType, SavedCharacter } from '../types'
 import { effectDisplayStr } from '../utils/unionEffects'
+import { guessClassType } from '../utils/classData'
 import CharacterCard from '../components/CharacterCard'
 import UnionStatsPanel from '../components/UnionStatsPanel'
 
@@ -34,6 +35,7 @@ const GRADE_COLOR: Record<Grade, string> = {
 
 // ── 뷰 타입 ───────────────────────────────────────────────────────
 type ViewMode = 'table' | 'card'
+type ClassFilter = '전체' | ClassType
 
 // ── 필터 조건 ─────────────────────────────────────────────────────
 type Operator = 'gte' | 'lt'   // 이상 | 미만
@@ -51,6 +53,7 @@ export default function CharacterListScreen({ onOpenSidebar }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('table')
   const [gradeFilter, setGradeFilter] = useState<GradeFilter>('전체')
   const [gradeOp, setGradeOp] = useState<Operator>('gte')
+  const [classFilter, setClassFilter] = useState<ClassFilter>('전체')
   const [confirmLogout, setConfirmLogout] = useState(false)
 
   const worlds = Array.from(
@@ -83,6 +86,7 @@ export default function CharacterListScreen({ onOpenSidebar }: Props) {
       const threshold = GRADE_LEVEL[gradeFilter as Grade]
       return gradeOp === 'gte' ? c.character_level >= threshold : c.character_level < threshold
     })
+    .filter(c => classFilter === '전체' || guessClassType(c.character_class) === classFilter)
     .sort((a, b) => b.character_level - a.character_level)
 
   return (
@@ -193,6 +197,19 @@ export default function CharacterListScreen({ onOpenSidebar }: Props) {
         {/* 등급 필터 */}
         <div className="flex items-center gap-1.5 shrink-0">
           <select
+            value={classFilter}
+            onChange={e => setClassFilter(e.target.value as ClassFilter)}
+            className="bg-bg-deep border border-bg-deep rounded-lg px-2 py-1.5 text-white text-xs
+                       focus:outline-none focus:border-accent/50 cursor-pointer"
+          >
+            <option value="전체">직업군 전체</option>
+            <option value="warrior">전사</option>
+            <option value="archer">궁수</option>
+            <option value="thief">도적</option>
+            <option value="mage">마법사</option>
+            <option value="pirate">해적</option>
+          </select>
+          <select
             value={gradeFilter}
             onChange={e => setGradeFilter(e.target.value as GradeFilter)}
             className="bg-bg-deep border border-bg-deep rounded-lg px-2 py-1.5 text-white text-xs
@@ -223,7 +240,7 @@ export default function CharacterListScreen({ onOpenSidebar }: Props) {
       {/* ── 본문 ─────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* 왼쪽: 캐릭터 목록 */}
-        <div className="w-1/2 flex flex-col overflow-hidden min-h-0">
+        <div className="w-[70%] flex flex-col overflow-hidden min-h-0">
           <div className="flex-1 overflow-y-auto min-h-0">
             {loadingAll ? (
               <div className="flex items-center justify-center h-40">
@@ -256,7 +273,7 @@ export default function CharacterListScreen({ onOpenSidebar }: Props) {
         </div>
 
         {/* 오른쪽: 유니온 통계 패널 */}
-        <div className="w-1/2 flex flex-col overflow-hidden min-h-0">
+        <div className="w-[30%] flex flex-col overflow-hidden min-h-0">
           <div className="flex-1 overflow-y-auto min-h-0">
             {activeWorld ? (
               <UnionStatsPanel world={activeWorld} />

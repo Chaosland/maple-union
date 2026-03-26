@@ -59,9 +59,9 @@ export type ClassType = 'warrior' | 'mage' | 'archer' | 'thief' | 'pirate'
 
 export const CLASS_TYPE_COLORS: Record<ClassType, string> = {
   warrior: '#e53935',
-  mage:    '#7b1fa2',
+  mage:    '#1565c0',
   archer:  '#388e3c',
-  thief:   '#1565c0',
+  thief:   '#7b1fa2',
   pirate:  '#f57f17'
 }
 
