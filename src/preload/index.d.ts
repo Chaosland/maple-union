@@ -6,13 +6,18 @@ interface IpcResult<T = unknown> {
 
 interface Window {
   api: {
-    auth: {
-      login(): Promise<{ ok: boolean; error?: string }>
-      logout(): Promise<{ ok: boolean }>
-      isLoggedIn(): Promise<boolean>
+    creds: {
+      save(key: string): Promise<{ ok: boolean; error?: string }>
+      clear(): Promise<{ ok: boolean }>
+      hasKey(): Promise<boolean>
+    }
+    chars: {
+      loadAll(): Promise<IpcResult>
+      onProgress(cb: (done: number, total: number) => void): () => void
     }
     nexon: {
-      getCharacterList(): Promise<IpcResult>
+      getOcid(name: string): Promise<IpcResult>
+      getCharacterBasic(ocid: string): Promise<IpcResult>
       getUnionInfo(ocid: string): Promise<IpcResult>
       getUnionRaider(ocid: string): Promise<IpcResult>
     }

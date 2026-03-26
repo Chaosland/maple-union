@@ -4,6 +4,7 @@ import { calcRecommendation, UnionRecommendation } from '../utils/unionRecommend
 
 const SAVED_KEY   = 'maple_saved_characters'
 const MAINS_KEY   = 'mainCharsByWorld'
+const API_KEY_STORAGE = 'maple_api_key'
 const MAX_PER_WORLD = 50
 
 // 스페셜 월드 제외 목록
@@ -21,6 +22,57 @@ function loadSavedMains(): Record<string, string> {
 }
 function persistMains(mains: Record<string, string>): void {
   localStorage.setItem(MAINS_KEY, JSON.stringify(mains))
+}
+
+// ─── API 키 헬퍼 ─────────────────────────────────────────────────────────────
+function getApiKey(): string | null {
+  return localStorage.getItem(API_KEY_STORAGE)
+}
+
+function apiHeaders(): HeadersInit {
+  const key = getApiKey()
+  return key
+    ? { 'X-Api-Key': key, 'Content-Type': 'application/json' }
+    : { 'Content-Type': 'application/json' }
+}
+
+type CharLike = {
+  ocid: string
+  character_name: string
+  world_name: string
+  character_class: string
+  character_level: number
+  character_image?: string
+}
+
+async function apiFetch(path: string): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  try {
+    const res = await fetch(path, { headers: apiHeaders() })
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
+    const json = await res.json()
+    return { ok: true, data: json }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+}
+
+function extractCharacterList(payload: unknown): CharLike[] {
+  // format A: { ok: true, data: CharLike[] }
+  const wrapped = payload as { ok?: boolean; data?: unknown; account_list?: unknown }
+  if (wrapped?.ok === true && Array.isArray(wrapped.data)) {
+    return wrapped.data as CharLike[]
+  }
+
+  // format B: { account_list: [{ character_list: [...] }] }
+  if (Array.isArray(wrapped?.account_list)) {
+    return wrapped.account_list.flatMap((acc: unknown) => {
+      const account = acc as { character_list?: unknown[] }
+      if (!Array.isArray(account.character_list)) return []
+      return account.character_list as CharLike[]
+    })
+  }
+
+  return []
 }
 
 /** 서버별 본캐 자동 탐지: 최고 레벨, 동레벨 시 이름 가나다 첫 번째 */
@@ -86,7 +138,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   recommendation: null,
 
   initialize: async () => {
-    const hasKey = await window.api.creds.hasKey()
+    const hasKey = !!getApiKey()
     const saved  = loadSaved()
     set({ status: hasKey ? 'ready' : 'no-key', savedCharacters: saved })
     // API 키가 있으면 재시작 시 자동으로 전체 불러오기
@@ -96,16 +148,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   saveCredentials: async ({ serviceKey }) => {
-    const result = await window.api.creds.save(serviceKey)
-    if (!result.ok) { set({ error: result.error ?? '저장 실패' }); return false }
-    set({ status: 'ready', savedCharacters: loadSaved(), error: null })
+    localStorage.setItem(API_KEY_STORAGE, serviceKey.trim())
+    set({ status: 'ready', error: null })
     // 최초 등록 시 자동 전체 불러오기
     get().loadAllCharacters()
     return true
   },
 
   clearCredentials: async () => {
-    await window.api.creds.clear()
+    localStorage.removeItem(API_KEY_STORAGE)
     set({
       status: 'no-key', savedCharacters: [], mainCharsByWorld: {},
       selectedCharacter: null, unionInfo: null, unionRaider: null, recommendation: null
@@ -114,10 +165,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   searchCharacter: async (name) => {
     set({ error: null })
-    const ocidRes = await window.api.nexon.getOcid(name)
+    const ocidRes = await apiFetch(`/api/nexon/maplestory/v1/id?character_name=${encodeURIComponent(name)}`)
     if (!ocidRes.ok) { set({ error: ocidRes.error ?? `'${name}' 캐릭터를 찾을 수 없습니다` }); return null }
 
-    const basicRes = await window.api.nexon.getCharacterBasic(ocidRes.data as string)
+    const ocidData = ocidRes.data as { ocid: string }
+    const ocid = ocidData.ocid
+
+    const basicRes = await apiFetch(`/api/nexon/maplestory/v1/character/basic?ocid=${encodeURIComponent(ocid)}`)
     if (!basicRes.ok) { set({ error: basicRes.error ?? '정보 조회 실패' }); return null }
 
     const b = basicRes.data as {
@@ -125,7 +179,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       character_class: string; character_level: number; character_image?: string
     }
     const char: SavedCharacter = {
-      ocid: ocidRes.data as string, addedAt: Date.now(),
+      ocid, addedAt: Date.now(),
       character_name: b.character_name, world_name: b.world_name,
       character_class: b.character_class, character_level: b.character_level,
       character_image: b.character_image
@@ -143,20 +197,34 @@ export const useAppStore = create<AppStore>((set, get) => ({
   loadAllCharacters: async () => {
     set({ loadingAll: true, loadProgress: null, error: null })
 
-    const unsub = window.api.chars.onProgress((done, total) => {
-      set({ loadProgress: { done, total } })
-    })
-
     try {
-      const res = await window.api.chars.loadAll()
-      if (!res.ok) { set({ error: res.error ?? '불러오기 실패' }); return }
+      let rawPayload: unknown = null
 
-      const list = (res.data as Array<{
-        ocid: string; character_name: string; world_name: string
-        character_class: string; character_level: number; character_image?: string
-      }>)
+      // Electron 경로: main 프로세스에서 직접 Nexon API 호출
+      if (window.api?.chars?.loadAll) {
+        const result = await window.api.chars.loadAll()
+        if (!result.ok) {
+          set({ error: result.error ?? '불러오기 실패' })
+          return
+        }
+        rawPayload = { ok: true, data: result.data }
+      } else {
+        // 웹/API 경로: /api/charlist
+        const res = await fetch('/api/charlist', {
+          headers: apiHeaders(),
+          cache: 'no-store'
+        })
+        rawPayload = await res.json()
+      }
+
+      const list = extractCharacterList(rawPayload)
         .filter(c => c.character_level >= 60)
         .filter(c => c.world_name && !SPECIAL_WORLDS.has(c.world_name))
+
+      if (list.length === 0) {
+        set({ error: '캐릭터 목록이 비어 있거나 응답 형식이 올바르지 않습니다' })
+        return
+      }
 
       // 서버별 MAX_PER_WORLD 제한
       const byWorld: Record<string, SavedCharacter[]> = {}
@@ -179,8 +247,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
       persistMains(merged)
       set({ savedCharacters: next, mainCharsByWorld: merged })
+    } catch (e) {
+      set({ error: String(e) })
     } finally {
-      unsub()
       set({ loadingAll: false, loadProgress: null })
     }
   },
@@ -201,8 +270,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ selectedCharacter: c, unionInfo: null, unionRaider: null, unionLoading: true, error: null })
     try {
       const [infoRes, raiderRes] = await Promise.all([
-        window.api.nexon.getUnionInfo(c.ocid),
-        window.api.nexon.getUnionRaider(c.ocid)
+        apiFetch(`/api/nexon/maplestory/v1/user/union?ocid=${encodeURIComponent(c.ocid)}`),
+        apiFetch(`/api/nexon/maplestory/v1/user/union-raider?ocid=${encodeURIComponent(c.ocid)}`)
       ])
       if (!infoRes.ok)   throw new Error(infoRes.error)
       if (!raiderRes.ok) throw new Error(raiderRes.error)

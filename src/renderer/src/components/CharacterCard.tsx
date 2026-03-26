@@ -19,16 +19,17 @@ export default function CharacterCard({ character, isMain, onSetMain }: Props) {
           : 'bg-bg-card border-bg-deep'
       }`}
     >
-      {/* 캐릭터 이미지 — 배경 고정, 이미지 3배 확대 */}
+      {/* 캐릭터 이미지 — 72px 고정 프레임 */}
       <div
-        className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0 overflow-hidden border"
+        className="w-[72px] h-[72px] rounded-xl flex items-center justify-center shrink-0 overflow-hidden border"
         style={{ background: `${color}20`, borderColor: `${color}40` }}
       >
         {character.character_image ? (
           <img
             src={character.character_image}
             alt={character.character_name}
-            style={{ transform: 'translateY(16px) scale(3)', transformOrigin: 'center 70%', imageRendering: 'pixelated' }}
+            className="w-full h-full object-contain"
+            style={{ transform: 'translateY(8px) scale(1.9)', transformOrigin: 'center 72%', imageRendering: 'auto' }}
           />
         ) : (
           <span className="text-lg" style={{ color }}>

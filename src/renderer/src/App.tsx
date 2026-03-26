@@ -95,6 +95,14 @@ export default function App() {
             <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
             {theme === 'dark' ? '라이트 모드' : '다크 모드'}
           </button>
+          <button
+            onClick={() => window.open('https://ko-fi.com/chaosland', '_blank', 'noopener,noreferrer')}
+            className="mt-2 w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-muted
+                       hover:bg-bg-deep hover:text-white transition-colors"
+          >
+            <span>☕</span>
+            후원하기
+          </button>
         </div>
       </aside>
 

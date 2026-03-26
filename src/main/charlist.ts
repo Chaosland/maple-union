@@ -14,7 +14,12 @@ export interface CharBasic {
 // 서비스 API 키로 캐릭터 OCID 목록 조회
 async function fetchOcidList(apiKey: string): Promise<string[]> {
   const res = await fetch(`${BASE}/maplestory/v1/character/list`, {
-    headers: { 'x-nxopen-api-key': apiKey }
+    headers: {
+      'x-nxopen-api-key': apiKey,
+      'Cache-Control': 'no-store, no-cache',
+      Pragma: 'no-cache'
+    },
+    cache: 'no-store'
   })
   if (!res.ok) {
     const msg = await res.text().catch(() => '')
@@ -40,7 +45,12 @@ async function fetchBasicBatch(
     const settled = await Promise.allSettled(
       chunk.map(ocid =>
         fetch(`${BASE}/maplestory/v1/character/basic?ocid=${encodeURIComponent(ocid)}`, {
-          headers: { 'x-nxopen-api-key': apiKey }
+          headers: {
+            'x-nxopen-api-key': apiKey,
+            'Cache-Control': 'no-store, no-cache',
+            Pragma: 'no-cache'
+          },
+          cache: 'no-store'
         })
           .then(r => r.json() as Promise<CharBasic>)
           .then(d => ({ ...d, ocid }))
@@ -51,6 +61,59 @@ async function fetchBasicBatch(
     if (i + BATCH < ocids.length) await new Promise(r => setTimeout(r, 150))
   }
   return results
+}
+
+async function verifyById(
+  basics: CharBasic[],
+  apiKey: string,
+  onProgress: (done: number, total: number) => void
+): Promise<CharBasic[]> {
+  const BATCH = 5
+  const next = [...basics]
+
+  for (let i = 0; i < next.length; i += BATCH) {
+    const chunk = next.slice(i, i + BATCH)
+    const settled = await Promise.allSettled(
+      chunk.map(async (c) => {
+        const name = c.character_name?.trim()
+        if (!name) return c
+
+        const idRes = await fetch(`${BASE}/maplestory/v1/id?character_name=${encodeURIComponent(name)}`, {
+          headers: {
+            'x-nxopen-api-key': apiKey,
+            'Cache-Control': 'no-store, no-cache',
+            Pragma: 'no-cache'
+          },
+          cache: 'no-store'
+        })
+        if (!idRes.ok) return c
+
+        const idJson = await idRes.json() as { ocid?: string }
+        if (!idJson.ocid) return c
+
+        const basicRes = await fetch(`${BASE}/maplestory/v1/character/basic?ocid=${encodeURIComponent(idJson.ocid)}`, {
+          headers: {
+            'x-nxopen-api-key': apiKey,
+            'Cache-Control': 'no-store, no-cache',
+            Pragma: 'no-cache'
+          },
+          cache: 'no-store'
+        })
+        if (!basicRes.ok) return c
+
+        const basicJson = await basicRes.json() as CharBasic
+        return { ...basicJson, ocid: idJson.ocid }
+      })
+    )
+
+    settled.forEach((r, idx) => {
+      if (r.status === 'fulfilled') next[i + idx] = r.value
+    })
+    onProgress(Math.min(i + BATCH, next.length), next.length)
+    if (i + BATCH < next.length) await new Promise(r => setTimeout(r, 150))
+  }
+
+  return next
 }
 
 // ── 공개 API ──────────────────────────────────────────────────────────────────
@@ -64,5 +127,6 @@ export async function loadAllCharacters(
   const ocids = await fetchOcidList(apiKey)
   if (ocids.length === 0) return []
 
-  return fetchBasicBatch(ocids, apiKey, onProgress)
+  const basics = await fetchBasicBatch(ocids, apiKey, onProgress)
+  return verifyById(basics, apiKey, onProgress)
 }

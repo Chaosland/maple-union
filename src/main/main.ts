@@ -1,11 +1,20 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
-import { join } from 'path'
+import { existsSync } from 'fs'
+import { dirname, join } from 'path'
+import { fileURLToPath } from 'url'
 import { saveCredentials, clearCredentials, hasServiceKey } from './apikey'
 import { getOcid, getCharacterBasic, getUnionInfo, getUnionRaider } from './nexon-api'
 import { loadAllCharacters } from './charlist'
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
 const shouldOpenDevTools = process.env.OPEN_DEVTOOLS === '1'
+const preloadPath = existsSync(join(__dirname, 'preload.js'))
+  ? join(__dirname, 'preload.js')
+  : join(__dirname, 'preload.mjs')
+const rendererIndexPath = join(__dirname, '../dist/index.html')
+const windowIconPath = join(__dirname, '../build/icon.png')
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -16,14 +25,25 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: '메이플 유니온 도우미',
+    ...(existsSync(windowIconPath) ? { icon: windowIconPath } : {}),
     webPreferences: {
-      preload: join(__dirname, 'preload.js'),
+      preload: preloadPath,
       sandbox: false,
       contextIsolation: true
     }
   })
 
   win.on('ready-to-show', () => win.show())
+  win.webContents.on('before-input-event', (event, input) => {
+    const isDevToolsShortcut =
+      input.key === 'F12' ||
+      ((input.control || input.meta) && input.shift && input.key.toUpperCase() === 'I')
+
+    if (isDevToolsShortcut) event.preventDefault()
+  })
+  win.webContents.on('devtools-opened', () => {
+    if (!shouldOpenDevTools) win.webContents.closeDevTools()
+  })
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
@@ -33,7 +53,7 @@ function createWindow(): void {
     win.loadURL(process.env.VITE_DEV_SERVER_URL)
     if (shouldOpenDevTools) win.webContents.openDevTools()
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(rendererIndexPath)
   }
 }
 
