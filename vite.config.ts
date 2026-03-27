@@ -11,8 +11,9 @@ function obfuscatorPlugin(): Plugin {
     enforce: 'post',
     async renderChunk(code, chunk) {
       if (!chunk.fileName.endsWith('.js') && !chunk.fileName.endsWith('.mjs')) return null
-      // 계산 성능 민감한 렌더러/워커 번들은 난독화 제외
-      // (union solver worker 및 renderer assets)
+      // preload는 contextBridge IPC 브릿지 — 난독화하면 window.api 프로퍼티 손상 가능
+      if (chunk.fileName === 'preload.js') return null
+      // 렌더러/워커 번들 제외
       if (chunk.fileName.startsWith('assets/')) return null
       const { default: JavaScriptObfuscator } = await import('javascript-obfuscator')
       const result = JavaScriptObfuscator.obfuscate(code, {

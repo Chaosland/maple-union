@@ -156,6 +156,7 @@ interface AppStore {
   unionInfo: UnionInfo | null
   unionRaider: UnionRaider | null
   unionLoading: boolean
+  unionError: string | null
 
   loadingAll: boolean
   loadProgress: { done: number; total: number } | null
@@ -186,6 +187,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   unionInfo: null,
   unionRaider: null,
   unionLoading: false,
+  unionError: null,
   loadingAll: false,
   loadProgress: null,
   recommendation: null,
@@ -386,12 +388,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
       selectedCharacter: null,
       unionInfo: null,
       unionRaider: null,
+      unionError: null,
       recommendation: null,
     })
   },
 
   loadUnionData: async (c) => {
-    set({ selectedCharacter: c, unionInfo: null, unionRaider: null, unionLoading: true, error: null })
+    set({ selectedCharacter: c, unionInfo: null, unionRaider: null, unionLoading: true, unionError: null })
     try {
       const [infoRes, raiderRes] = await Promise.all([
         apiFetch(`/api/nexon/maplestory/v1/user/union?ocid=${encodeURIComponent(c.ocid)}`),
@@ -411,7 +414,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         )
       })
     } catch (e) {
-      set({ error: String(e) })
+      // 유니온 데이터 로드 실패는 전역 모달이 아닌 unionError로만 처리
+      set({ unionError: String(e) })
     } finally {
       set({ unionLoading: false })
     }

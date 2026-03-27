@@ -5,7 +5,7 @@ import UnionBoard from '../components/UnionBoard'
 
 export default function UnionStatusScreen() {
   const navigate = useNavigate()
-  const { selectedCharacter, unionInfo, unionRaider, unionLoading, error, loadUnionData } = useAppStore()
+  const { selectedCharacter, unionInfo, unionRaider, unionLoading, unionError, loadUnionData } = useAppStore()
 
   if (!selectedCharacter) { navigate('/'); return null }
 
@@ -45,10 +45,10 @@ export default function UnionStatusScreen() {
             <span className="animate-spin text-accent text-3xl">⟳</span>
             <p className="text-muted text-sm">유니온 정보 로딩 중...</p>
           </div>
-        ) : error ? (
+        ) : unionError ? (
           <div className="flex flex-col items-center justify-center h-64 gap-4">
             <p className="text-muted">유니온 정보를 불러올 수 없습니다</p>
-            <p className="text-subtle text-sm">{error}</p>
+            <p className="text-subtle text-sm">{unionError}</p>
             <button onClick={() => loadUnionData(selectedCharacter)}
               className="bg-accent hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm transition-colors">
               다시 시도
