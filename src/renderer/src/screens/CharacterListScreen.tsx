@@ -45,8 +45,15 @@ interface Props {
 }
 
 export default function CharacterListScreen({ onOpenSidebar }: Props) {
-  const { savedCharacters: characters, mainCharsByWorld, loadingAll, clearCredentials, setMainForWorld, loadAllCharacters } = useAppStore()
+  const {
+    savedCharacters: allCharacters, mainCharsByWorld, loadingAll,
+    clearCredentials, setMainForWorld, loadAllCharacters,
+    selectedAccountIndex, accountCount, setSelectedAccount,
+  } = useAppStore()
   const { theme, toggleTheme } = useTheme()
+
+  // 현재 선택된 계정 캐릭터만 사용
+  const characters = allCharacters.filter(c => (c.accountIndex ?? 0) === selectedAccountIndex)
 
   const [search, setSearch] = useState('')
   const [worldFilter, setWorldFilter] = useState<string | null>(null)
@@ -153,6 +160,30 @@ export default function CharacterListScreen({ onOpenSidebar }: Props) {
           </button>
         </div>
       </header>
+
+      {/* ── 계정 탭 (2개 이상일 때만) ────────────────────────── */}
+      {accountCount > 1 && (
+        <div className="bg-bg-deep border-b border-bg-card px-4 flex gap-1 overflow-x-auto shrink-0">
+          {Array.from({ length: accountCount }, (_, i) => {
+            const count = allCharacters.filter(c => (c.accountIndex ?? 0) === i).length
+            const isActive = selectedAccountIndex === i
+            return (
+              <button
+                key={i}
+                onClick={() => setSelectedAccount(i)}
+                className={`flex-shrink-0 px-4 py-2 text-sm font-semibold transition-colors border-b-2 ${
+                  isActive ? 'border-accent text-accent' : 'border-transparent text-subtle hover:text-white'
+                }`}
+              >
+                계정 {i + 1}
+                <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+                  isActive ? 'bg-accent/20 text-accent' : 'bg-bg-card text-subtle'
+                }`}>{count}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* ── 서버 탭 ──────────────────────────────────────────── */}
       <div className="bg-bg-card border-b border-bg-deep px-4 flex gap-1 overflow-x-auto shrink-0">

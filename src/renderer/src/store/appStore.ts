@@ -3,7 +3,7 @@ import { SavedCharacter, UnionInfo, UnionRaider } from '../types'
 import { calcRecommendation, UnionRecommendation } from '../utils/unionRecommender'
 
 const SAVED_KEY   = 'maple_saved_characters'
-const MAINS_KEY   = 'mainCharsByWorld'
+const MAINS_KEY   = (ai: number) => `mainCharsByWorld_${ai}`
 const API_KEY_STORAGE = 'maple_api_key'
 const MAX_PER_WORLD = 50
 
@@ -17,11 +17,11 @@ function loadSaved(): SavedCharacter[] {
 function persistSaved(list: SavedCharacter[]): void {
   localStorage.setItem(SAVED_KEY, JSON.stringify(list))
 }
-function loadSavedMains(): Record<string, string> {
-  try { return JSON.parse(localStorage.getItem(MAINS_KEY) ?? '{}') } catch { return {} }
+function loadSavedMains(ai = 0): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(MAINS_KEY(ai)) ?? '{}') } catch { return {} }
 }
-function persistMains(mains: Record<string, string>): void {
-  localStorage.setItem(MAINS_KEY, JSON.stringify(mains))
+function persistMains(ai: number, mains: Record<string, string>): void {
+  localStorage.setItem(MAINS_KEY(ai), JSON.stringify(mains))
 }
 
 // ─── API 키 헬퍼 ─────────────────────────────────────────────────────────────
@@ -43,6 +43,7 @@ type CharLike = {
   character_class: string
   character_level: number
   character_image?: string
+  accountIndex?: number
 }
 
 async function apiFetch(path: string): Promise<{ ok: boolean; data?: unknown; error?: string }> {
@@ -144,7 +145,11 @@ interface AppStore {
   error: string | null
 
   savedCharacters: SavedCharacter[]
-  /** 서버별 본캐 ocid 맵 — localStorage 영속 */
+  /** 현재 선택된 계정 인덱스 */
+  selectedAccountIndex: number
+  /** 총 계정 수 */
+  accountCount: number
+  /** 서버별 본캐 ocid 맵 — 선택된 계정 기준, localStorage 영속 */
   mainCharsByWorld: Record<string, string>
 
   selectedCharacter: SavedCharacter | null
@@ -158,22 +163,25 @@ interface AppStore {
   recommendation: UnionRecommendation | null
 
   // actions
-  initialize:        () => Promise<void>
-  saveCredentials:   (data: { serviceKey: string }) => Promise<boolean>
-  clearCredentials:  () => Promise<void>
-  searchCharacter:   (name: string) => Promise<SavedCharacter | null>
-  loadAllCharacters: () => Promise<void>
-  removeCharacter:   (ocid: string) => void
-  setMainForWorld:   (world: string, ocid: string) => void
-  loadUnionData:     (c: SavedCharacter) => Promise<void>
-  clearError:        () => void
+  initialize:          () => Promise<void>
+  saveCredentials:     (data: { serviceKey: string }) => Promise<boolean>
+  clearCredentials:    () => Promise<void>
+  searchCharacter:     (name: string) => Promise<SavedCharacter | null>
+  loadAllCharacters:   () => Promise<void>
+  removeCharacter:     (ocid: string) => void
+  setMainForWorld:     (world: string, ocid: string) => void
+  setSelectedAccount:  (index: number) => void
+  loadUnionData:       (c: SavedCharacter) => Promise<void>
+  clearError:          () => void
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
   status: 'init',
   error: null,
   savedCharacters: [],
-  mainCharsByWorld: loadSavedMains(),
+  selectedAccountIndex: 0,
+  accountCount: 1,
+  mainCharsByWorld: loadSavedMains(0),
   selectedCharacter: null,
   unionInfo: null,
   unionRaider: null,
@@ -310,27 +318,39 @@ export const useAppStore = create<AppStore>((set, get) => ({
         return
       }
 
-      // 서버별 MAX_PER_WORLD 제한
-      const byWorld: Record<string, SavedCharacter[]> = {}
+      // 계정 수 산출
+      const accountCount = new Set(list.map(c => c.accountIndex ?? 0)).size || 1
+
+      // 계정+서버별 MAX_PER_WORLD 제한
+      const byKey: Record<string, SavedCharacter[]> = {}
       for (const c of list) {
-        if (!byWorld[c.world_name]) byWorld[c.world_name] = []
-        if (byWorld[c.world_name].length < MAX_PER_WORLD) {
-          byWorld[c.world_name].push({ ...c, addedAt: Date.now() })
+        const ai = c.accountIndex ?? 0
+        const key = `${ai}:${c.world_name}`
+        if (!byKey[key]) byKey[key] = []
+        if (byKey[key].length < MAX_PER_WORLD) {
+          byKey[key].push({ ...c, addedAt: Date.now(), accountIndex: ai })
         }
       }
-      const next = Object.values(byWorld).flat()
+      const next = Object.values(byKey).flat()
         .sort((a, b) => b.character_level - a.character_level)
       persistSaved(next)
 
-      // 저장된 본캐 검증 + 없으면 자동 탐지
-      const savedMains = loadSavedMains()
-      const autoMains  = autoDetectMains(next)
-      const merged: Record<string, string> = { ...autoMains }
-      for (const [world, ocid] of Object.entries(savedMains)) {
-        if (next.some(c => c.ocid === ocid)) merged[world] = ocid // 수동 설정 우선
+      // 계정별 본캐 저장 (자동 탐지 + 수동 설정 우선)
+      for (let ai = 0; ai < accountCount; ai++) {
+        const acChars = next.filter(c => (c.accountIndex ?? 0) === ai)
+        const savedMains = loadSavedMains(ai)
+        const autoMains  = autoDetectMains(acChars)
+        const merged: Record<string, string> = { ...autoMains }
+        for (const [world, ocid] of Object.entries(savedMains)) {
+          if (acChars.some(c => c.ocid === ocid)) merged[world] = ocid
+        }
+        persistMains(ai, merged)
       }
-      persistMains(merged)
-      set({ savedCharacters: next, mainCharsByWorld: merged })
+
+      // 현재 선택된 계정 mains 적용
+      const selectedAccountIndex = get().selectedAccountIndex
+      const currentMains = loadSavedMains(selectedAccountIndex)
+      set({ savedCharacters: next, mainCharsByWorld: currentMains, accountCount })
     } catch (e) {
       set({ error: String(e) })
     } finally {
@@ -345,9 +365,29 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   setMainForWorld: (world, ocid) => {
+    const ai = get().selectedAccountIndex
     const updated = { ...get().mainCharsByWorld, [world]: ocid }
-    persistMains(updated)
+    persistMains(ai, updated)
     set({ mainCharsByWorld: updated })
+  },
+
+  setSelectedAccount: (index) => {
+    const chars = get().savedCharacters
+    const acChars = chars.filter(c => (c.accountIndex ?? 0) === index)
+    const savedMains = loadSavedMains(index)
+    const autoMains  = autoDetectMains(acChars)
+    const merged: Record<string, string> = { ...autoMains }
+    for (const [world, ocid] of Object.entries(savedMains)) {
+      if (acChars.some(c => c.ocid === ocid)) merged[world] = ocid
+    }
+    set({
+      selectedAccountIndex: index,
+      mainCharsByWorld: merged,
+      selectedCharacter: null,
+      unionInfo: null,
+      unionRaider: null,
+      recommendation: null,
+    })
   },
 
   loadUnionData: async (c) => {
@@ -364,7 +404,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const unionRaider = raiderRes.data as UnionRaider
       set({
         unionInfo, unionRaider,
-        recommendation: calcRecommendation(c.character_class, get().savedCharacters, unionRaider)
+        recommendation: calcRecommendation(
+          c.character_class,
+          get().savedCharacters.filter(sc => (sc.accountIndex ?? 0) === get().selectedAccountIndex),
+          unionRaider
+        )
       })
     } catch (e) {
       set({ error: String(e) })

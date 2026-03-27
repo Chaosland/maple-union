@@ -9,10 +9,11 @@ export interface CharBasic {
   character_class: string
   character_level: number
   character_image?: string
+  accountIndex: number
 }
 
-// 서비스 API 키로 캐릭터 OCID 목록 조회
-async function fetchOcidList(apiKey: string): Promise<string[]> {
+// 서비스 API 키로 캐릭터 OCID 목록 조회 (계정 인덱스 포함)
+async function fetchOcidList(apiKey: string): Promise<{ ocid: string; accountIndex: number }[]> {
   const res = await fetch(`${BASE}/maplestory/v1/character/list`, {
     headers: {
       'x-nxopen-api-key': apiKey,
@@ -28,31 +29,37 @@ async function fetchOcidList(apiKey: string): Promise<string[]> {
   const json = await res.json() as {
     account_list: Array<{ character_list: Array<{ ocid: string }> }>
   }
-  return (json.account_list ?? []).flatMap(a => (a.character_list ?? []).map(c => c.ocid))
+  return (json.account_list ?? []).flatMap((a, accountIndex) =>
+    (a.character_list ?? []).map(c => ({ ocid: c.ocid, accountIndex }))
+  )
 }
 
-async function fetchOneBasic(ocid: string, apiKey: string, retries = 2): Promise<CharBasic> {
+async function fetchOneBasic(
+  entry: { ocid: string; accountIndex: number },
+  apiKey: string,
+  retries = 2
+): Promise<CharBasic> {
+  const { ocid, accountIndex } = entry
   for (let attempt = 0; attempt <= retries; attempt++) {
     const r = await fetch(`${BASE}/maplestory/v1/character/basic?ocid=${encodeURIComponent(ocid)}`, {
       headers: { 'x-nxopen-api-key': apiKey, 'Cache-Control': 'no-store, no-cache', Pragma: 'no-cache' },
       cache: 'no-store'
     })
     if (r.status === 429) {
-      // 속도 제한: 재시도 전 대기
       if (attempt < retries) await new Promise(res => setTimeout(res, 1000 * (attempt + 1)))
       else throw new Error(`rate-limit ocid=${ocid}`)
       continue
     }
     if (!r.ok) throw new Error(`HTTP ${r.status} ocid=${ocid}`)
     const d = await r.json() as CharBasic
-    return { ...d, ocid }
+    return { ...d, ocid, accountIndex }
   }
   throw new Error(`failed ocid=${ocid}`)
 }
 
 // 기본 정보 배치 조회 (3개씩 병렬, 속도 제한)
 async function fetchBasicBatch(
-  ocids: string[],
+  ocids: { ocid: string; accountIndex: number }[],
   apiKey: string,
   onProgress: (done: number, total: number) => void
 ): Promise<CharBasic[]> {
@@ -61,7 +68,7 @@ async function fetchBasicBatch(
 
   for (let i = 0; i < ocids.length; i += BATCH) {
     const chunk = ocids.slice(i, i + BATCH)
-    const settled = await Promise.allSettled(chunk.map(ocid => fetchOneBasic(ocid, apiKey)))
+    const settled = await Promise.allSettled(chunk.map(entry => fetchOneBasic(entry, apiKey)))
     settled.forEach(r => { if (r.status === 'fulfilled') results.push(r.value) })
     onProgress(Math.min(i + BATCH, ocids.length), ocids.length)
     if (i + BATCH < ocids.length) await new Promise(r => setTimeout(r, 300))

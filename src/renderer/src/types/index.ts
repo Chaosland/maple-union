@@ -11,6 +11,7 @@ export interface Character {
 
 export interface SavedCharacter extends Character {
   addedAt: number
+  accountIndex: number
 }
 
 // ─── 유니온 ───────────────────────────────────────────────────────────────────

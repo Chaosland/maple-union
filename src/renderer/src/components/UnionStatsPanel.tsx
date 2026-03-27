@@ -37,7 +37,8 @@ function saveMLevel(world: string, level: number | null) {
 interface Props { world: string }
 
 export default function UnionStatsPanel({ world }: Props) {
-  const { savedCharacters: characters, mainCharsByWorld } = useAppStore()
+  const { savedCharacters: allCharacters, mainCharsByWorld, selectedAccountIndex } = useAppStore()
+  const characters = allCharacters.filter(c => (c.accountIndex ?? 0) === selectedAccountIndex)
 
   // 메이플스토리 M 최고 레벨 캐릭터 (레벨만 입력, 합산에 미반영)
   const [mLevel, setMLevelState] = useState<number | null>(() => loadMLevel(world))
