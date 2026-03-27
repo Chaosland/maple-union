@@ -14,9 +14,11 @@ const UPDATE_REPO_OWNER = 'Chaosland'
 const UPDATE_REPO_NAME = 'maple-union'
 const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPO_OWNER}/${UPDATE_REPO_NAME}/releases/latest`
 const UPDATE_RELEASE_URL = `https://github.com/${UPDATE_REPO_OWNER}/${UPDATE_REPO_NAME}/releases/latest`
-const preloadPath = existsSync(join(__dirname, 'preload.js'))
-  ? join(__dirname, 'preload.js')
-  : join(__dirname, 'preload.mjs')
+// 패키징 시 preload는 asarUnpack으로 asar 외부에 위치 → app.asar.unpacked 경로 사용
+// 개발 시에는 dist-electron/preload.js를 직접 참조
+const preloadPath = app.isPackaged
+  ? join(process.resourcesPath, 'app.asar.unpacked', 'dist-electron', 'preload.js')
+  : join(__dirname, 'preload.js')
 const rendererIndexPath = join(__dirname, '../dist/index.html')
 const windowIconCandidates = [
   join(process.resourcesPath, 'build', 'icon.ico'),

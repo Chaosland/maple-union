@@ -2,6 +2,7 @@
   "name": "maple-union",
   "version": "1.0.0",
   "description": "메이플스토리 유니온 육성 현황 및 배치 추천",
+  "author": "ChaosLand",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -21,7 +22,7 @@
     "@types/react-dom": "^18.2.19",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.17",
-    "electron": "^29.1.0",
+    "electron": "29.4.6",
     "electron-builder": "^24.13.3",
     "javascript-obfuscator": "^5.4.1",
     "postcss": "^8.4.35",
@@ -34,10 +35,7 @@
   "build": {
     "appId": "com.maple.union.helper",
     "productName": "메이플 유니온 도우미",
-    "electronLanguages": [
-      "ko",
-      "en-US"
-    ],
+    "electronVersion": "29.4.6",
     "win": {
       "target": [
         {
@@ -59,6 +57,9 @@
       "output": "release",
       "buildResources": "build"
     },
+    "asarUnpack": [
+      "dist-electron/preload.js"
+    ],
     "extraResources": [
       {
         "from": "build/icon.ico",
