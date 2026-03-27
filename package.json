@@ -34,6 +34,10 @@
   "build": {
     "appId": "com.maple.union.helper",
     "productName": "메이플 유니온 도우미",
+    "electronLanguages": [
+      "ko",
+      "en-US"
+    ],
     "win": {
       "target": [
         {
