@@ -64,22 +64,6 @@
 
 ---
 
-## 개발 환경 실행
-
-```bash
-npm install
-npm start
-```
-
-## 배포 빌드
-
-```bash
-npm run dist
-```
-
-`release/` 폴더에 설치 파일이 생성됩니다.
-
----
 
 ## 라이선스
 
