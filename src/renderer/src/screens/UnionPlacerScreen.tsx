@@ -9,9 +9,12 @@ import {
   CENTER_COL_LINE,
   CENTER_ROW_LINE,
   Cell,
+  PieceInventoryEntry,
   SelectionSolution,
+  SolverVariant,
   getEffectLabel,
   getPieceInventory,
+  getSolveVariants,
   getSelectableRegions,
   getWorldTotalLevel,
   hasCenterAnchor,
@@ -26,6 +29,8 @@ const INNER_FRAME = { left: 5, right: 17, top: 5, bottom: 15 }
 const EMPTY: SelectionSolution = { placements: [], usedTiles: 0, remainingTiles: 0, success: true, iterations: 0, elapsedMs: 0 }
 const SOLVER_TIMEOUT_MS = 30000
 const LS_M_KEY = (world: string) => `mapleM_level_${world}`
+const LS_PLANNER_CELLS_KEY = (world: string) => `union_planner_cells_${world}`
+const LS_PLANNER_BLOCKS_KEY = (world: string) => `union_planner_blocks_${world}`
 const TYPE_LABEL: Record<ClassType, string> = { warrior: '전사', mage: '마법사', archer: '궁수', thief: '도적', pirate: '해적' }
 const EFFECT_INFO: Record<string, { perCellText: string; maxText: string; perCellValue: number; unit: string; maxValue: number }> = {
   상태이상내성: { perCellText: '칸당 1', maxText: '최대 40', perCellValue: 1, unit: '', maxValue: 40 },
@@ -91,6 +96,55 @@ function loadMLevel(world: string): number | null {
   const v = localStorage.getItem(LS_M_KEY(world))
   return v ? parseInt(v, 10) : null
 }
+function loadJsonArray(key: string): string[] {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter(v => typeof v === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+type SolveWorkerRequest = {
+  selectedCells: Cell[]
+  inventoryEntries: PieceInventoryEntry[]
+  variant: SolverVariant
+}
+
+function ShapePreview({ cells, color }: { cells: Cell[]; color: string }) {
+  if (!cells.length) return null
+  const minX = Math.min(...cells.map(cell => cell.x))
+  const minY = Math.min(...cells.map(cell => cell.y))
+  const normalized = cells.map(cell => ({ x: cell.x - minX, y: cell.y - minY }))
+  const width = Math.max(...normalized.map(cell => cell.x)) + 1
+  const height = Math.max(...normalized.map(cell => cell.y)) + 1
+  const filled = new Set(normalized.map(cell => `${cell.x},${cell.y}`))
+
+  return (
+    <div
+      className="inline-grid gap-[1px] shrink-0"
+      style={{ gridTemplateColumns: `repeat(${width}, 8px)` }}
+      aria-hidden="true"
+    >
+      {Array.from({ length: width * height }, (_, i) => {
+        const x = i % width
+        const y = Math.floor(i / width)
+        const on = filled.has(`${x},${y}`)
+        return <span key={`${x},${y}`} className="w-2 h-2 rounded-[1px]" style={{ backgroundColor: on ? color : 'transparent' }} />
+      })}
+    </div>
+  )
+}
+
+function shouldUseSolution(candidate: SelectionSolution, current: SelectionSolution | null) {
+  if (!current) return true
+  if (candidate.success !== current.success) return candidate.success
+  if (candidate.usedTiles !== current.usedTiles) return candidate.usedTiles > current.usedTiles
+  if (candidate.remainingTiles !== current.remainingTiles) return candidate.remainingTiles < current.remainingTiles
+  return candidate.iterations > current.iterations
+}
 
 export default function UnionPlacerScreen() {
   const { savedCharacters, mainCharsByWorld, loadUnionData, unionRaider, unionInfo, unionLoading, selectedCharacter } = useAppStore()
@@ -107,7 +161,63 @@ export default function UnionPlacerScreen() {
   const [isSolving, setIsSolving] = useState(false)
   const [solveFailed, setSolveFailed] = useState(false)
   const [solveTimedOut, setSolveTimedOut] = useState(false)
-  const solverAbortRef = useRef<AbortController | null>(null)
+  const solverWorkersRef = useRef<Worker[]>([])
+  const solverRunIdRef = useRef(0)
+  function terminateSolverWorkers() {
+    solverWorkersRef.current.forEach(worker => {
+      worker.onmessage = null
+      worker.onerror = null
+      worker.terminate()
+    })
+    solverWorkersRef.current = []
+  }
+  function cancelActiveSolve() {
+    solverRunIdRef.current += 1
+    terminateSolverWorkers()
+  }
+  function runWorkerBatch(requests: SolveWorkerRequest[], runId: number): Promise<SelectionSolution> {
+    return new Promise((resolve, reject) => {
+      let resolved = false
+      let completedCount = 0
+      let completedIterations = 0
+      let bestSolution: SelectionSolution | null = null
+
+      const workers = requests.map(request => {
+        const worker = new Worker(new URL('../workers/unionSolver.worker.ts', import.meta.url), { type: 'module' })
+
+        worker.onmessage = (event: MessageEvent<SelectionSolution>) => {
+          if (resolved || solverRunIdRef.current !== runId) return
+
+          const solution = event.data
+          completedCount += 1
+          completedIterations += solution.iterations
+          if (shouldUseSolution(solution, bestSolution)) bestSolution = solution
+
+          if (solution.success) {
+            resolved = true
+            resolve({ ...solution, iterations: completedIterations })
+            return
+          }
+
+          if (completedCount === requests.length) {
+            resolved = true
+            resolve(bestSolution ? { ...bestSolution, iterations: completedIterations } : EMPTY)
+          }
+        }
+
+        worker.onerror = () => {
+          if (resolved || solverRunIdRef.current !== runId) return
+          resolved = true
+          reject(new Error('WORKER_ERROR'))
+        }
+
+        worker.postMessage(request)
+        return worker
+      })
+
+      solverWorkersRef.current = workers
+    })
+  }
 
   useEffect(() => { if (worlds.length > 0 && !selectedWorld) setSelectedWorld(worlds[0]) }, [worlds, selectedWorld])
   useEffect(() => {
@@ -145,8 +255,14 @@ export default function UnionPlacerScreen() {
   const pieceInventory = useMemo(() => getPieceInventory(selectedBlockCharacterList, { useAllCharacters: true }), [selectedBlockCharacterList])
   const availableTileCount = useMemo(() => pieceInventory.reduce((sum, item) => sum + item.cells.length * item.count, 0), [pieceInventory])
   const inventorySummary = useMemo(() => {
-    const map = new Map<string, { classType: ClassType; categoryLabel: string; grade: string; count: number }>()
-    const source = pieceInventory.map(item => ({ classType: item.classType, categoryLabel: item.categoryLabel, grade: item.grade, count: item.count }))
+    const map = new Map<string, { classType: ClassType; categoryLabel: string; grade: string; count: number; cells: Cell[] }>()
+    const source = pieceInventory.map(item => ({
+      classType: item.classType,
+      categoryLabel: item.categoryLabel,
+      grade: item.grade,
+      count: item.count,
+      cells: item.cells,
+    }))
     source.forEach(item => {
       const key = `${item.categoryLabel}:${item.grade}`, prev = map.get(key)
       if (prev) prev.count += item.count
@@ -180,8 +296,6 @@ export default function UnionPlacerScreen() {
   }, [plannerCells, availableTileCount, selectedBlockCharacterList.length, selectableBlockCount])
 
   const hasSelectionChanges = plannerSelectionKey !== lastSolvedSelectionKey
-  const solvedTileCount = useMemo(() => selectionSolution.placements.reduce((sum, p) => sum + p.cells.length, 0), [selectionSolution])
-
   const canRunCalculation = selectedBlockCharacterList.length === selectableBlockCount
     && plannerCells.length === availableTileCount
     && plannerCells.length > 0
@@ -209,7 +323,16 @@ export default function UnionPlacerScreen() {
     const keys = region.cells.map(cell => `${cell.x},${cell.y}`)
     setSelectedCells(prev => { const next = new Set(prev), all = keys.every(key => next.has(key)); keys.forEach(key => all ? next.delete(key) : next.add(key)); return next })
   }
-  function resetSelection() { setSelectedCells(new Set()); setSelectionSolution(EMPTY); setSolveStats({ iterations: 0, elapsedMs: 0 }); setLastSolvedSelectionKey(''); setSolveFailed(false); setSolveTimedOut(false) }
+  function clearSolveResultOnly() {
+    cancelActiveSolve()
+    setIsSolving(false)
+    setSelectionSolution(EMPTY)
+    setSolveStats({ iterations: 0, elapsedMs: 0 })
+    setLastSolvedSelectionKey('')
+    setSolveFailed(false)
+    setSolveTimedOut(false)
+  }
+  function resetSelection() { setSelectedCells(new Set()); clearSolveResultOnly() }
   async function runPlannerCalculation() {
     if (isSolving || !canRunCalculation) return
     setIsSolving(true)
@@ -217,62 +340,89 @@ export default function UnionPlacerScreen() {
     setSolveTimedOut(false)
     await new Promise(resolve => setTimeout(resolve, 10)) // React가 로딩 상태를 먼저 렌더링하도록 yield
 
-    // 이전 요청 취소
-    solverAbortRef.current?.abort()
-    const controller = new AbortController()
-    solverAbortRef.current = controller
-
-    const timeout = window.setTimeout(() => {
-      controller.abort()
-      if (solverAbortRef.current === controller) solverAbortRef.current = null
-      setSolveStats({ iterations: 0, elapsedMs: 0 })
-      setSelectionSolution(EMPTY)
-      setSolveFailed(true)
-      setSolveTimedOut(true)
-      setLastSolvedSelectionKey(plannerSelectionKey)
-      setIsSolving(false)
-    }, SOLVER_TIMEOUT_MS)
+    cancelActiveSolve()
+    const runId = solverRunIdRef.current
+    const variants = getSolveVariants(plannerCells)
+    const workerRequests = variants.map(variant => ({
+      selectedCells: plannerCells,
+      inventoryEntries: pieceInventory,
+      variant,
+    }))
+    const startedAt = performance.now()
+    let timeoutId: number | null = null
 
     try {
-      const res = await fetch('/api/solve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selectedCells: plannerCells, inventoryEntries: pieceInventory }),
-        signal: controller.signal,
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = window.setTimeout(() => reject(new Error('SOLVER_TIMEOUT')), SOLVER_TIMEOUT_MS)
       })
+      const workerPromise = runWorkerBatch(workerRequests, runId)
 
-      window.clearTimeout(timeout)
-      if (solverAbortRef.current === controller) solverAbortRef.current = null
+      const solution: SelectionSolution = await Promise.race([workerPromise, timeoutPromise])
+      if (solverRunIdRef.current !== runId) return
 
-      const solution: SelectionSolution = await res.json()
-      setSolveStats({ iterations: solution.iterations, elapsedMs: solution.elapsedMs })
+      const elapsedMs = Math.round(performance.now() - startedAt)
+      setSolveStats({ iterations: solution.iterations, elapsedMs })
       const isComplete = solution.success && solution.remainingTiles === 0 && solution.usedTiles === plannerCells.length
-      setSelectionSolution(isComplete ? solution : EMPTY)
+      setSelectionSolution(isComplete ? { ...solution, elapsedMs } : EMPTY)
       setSolveFailed(!isComplete)
       setSolveTimedOut(false)
       setLastSolvedSelectionKey(plannerSelectionKey)
     } catch (e) {
-      window.clearTimeout(timeout)
-      if (solverAbortRef.current === controller) solverAbortRef.current = null
-      if ((e as Error).name === 'AbortError') return // 타임아웃으로 이미 처리됨
-      setSolveStats({ iterations: 0, elapsedMs: 0 })
+      if (solverRunIdRef.current !== runId) return
+
+      const isTimeout = (e as Error).message === 'SOLVER_TIMEOUT'
+      terminateSolverWorkers()
+      setSolveStats({ iterations: 0, elapsedMs: isTimeout ? SOLVER_TIMEOUT_MS : 0 })
       setSelectionSolution(EMPTY)
       setSolveFailed(true)
-      setSolveTimedOut(false)
+      setSolveTimedOut(isTimeout)
       setLastSolvedSelectionKey(plannerSelectionKey)
     } finally {
-      setIsSolving(false)
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+      if (solverRunIdRef.current === runId) {
+        terminateSolverWorkers()
+        setIsSolving(false)
+      }
     }
   }
 
   useEffect(() => {
-    resetSelection()
+    if (!selectedWorld) return
+
+    clearSolveResultOnly()
+
+    const eligibleMap = new Map(eligibleBlockCharacters.map(character => [character.ocid, character]))
+    const savedCellKeys = loadJsonArray(LS_PLANNER_CELLS_KEY(selectedWorld))
+    const restoredCells = new Set(
+      savedCellKeys.filter(key => {
+        const [col, row] = key.split(',').map(Number)
+        return Number.isInteger(col) && Number.isInteger(row) && isCellUnlocked(row, col, worldTotalLevel)
+      })
+    )
+    setSelectedCells(restoredCells)
+
+    const savedBlocks = loadJsonArray(LS_PLANNER_BLOCKS_KEY(selectedWorld)).filter(ocid => eligibleMap.has(ocid))
+    const cappedSavedBlocks = new Set(savedBlocks.slice(0, selectableBlockCount))
+
+    if (cappedSavedBlocks.size > 0) {
+      setSelectedBlockCharacters(cappedSavedBlocks)
+      return
+    }
+
     const baseSlotCount = getGradeStep(worldTotalLevel)?.slots ?? 0
     const baseCharacters = eligibleBlockCharacters.filter(character => !character.ocid.startsWith('maplem:')).slice(0, baseSlotCount)
     const next = new Set(baseCharacters.map(character => character.ocid))
     if (mapleMCharacter) next.add(mapleMCharacter.ocid)
     setSelectedBlockCharacters(next)
   }, [selectedWorld, selectableBlockCount, worldTotalLevel, eligibleBlockCharacters, mapleMCharacter])
+  useEffect(() => {
+    if (!selectedWorld) return
+    localStorage.setItem(LS_PLANNER_CELLS_KEY(selectedWorld), JSON.stringify([...selectedCells]))
+  }, [selectedWorld, selectedCells])
+  useEffect(() => {
+    if (!selectedWorld) return
+    localStorage.setItem(LS_PLANNER_BLOCKS_KEY(selectedWorld), JSON.stringify([...selectedBlockCharacters]))
+  }, [selectedWorld, selectedBlockCharacters])
   useEffect(() => { setSelectionSolution(EMPTY); setSolveStats({ iterations: 0, elapsedMs: 0 }); setLastSolvedSelectionKey(''); setSolveFailed(false); setSolveTimedOut(false) }, [pieceInventory])
   useEffect(() => {
     if (plannerSelectionKey !== lastSolvedSelectionKey) setSelectionSolution(EMPTY)
@@ -282,7 +432,7 @@ export default function UnionPlacerScreen() {
     window.addEventListener('mouseup', clear); window.addEventListener('pointerup', clear); window.addEventListener('blur', clear)
     return () => { window.removeEventListener('mouseup', clear); window.removeEventListener('pointerup', clear); window.removeEventListener('blur', clear) }
   }, [])
-  useEffect(() => () => { solverAbortRef.current?.abort() }, [])
+  useEffect(() => () => { cancelActiveSolve() }, [])
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -307,6 +457,7 @@ export default function UnionPlacerScreen() {
                 <div key={`${item.categoryLabel}:${item.grade}`} className="flex items-center gap-2 px-3 py-1.5">
                   <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: CLASS_TYPE_COLORS[item.classType] }} />
                   <span className="text-white text-[11px] flex-1 truncate">{item.categoryLabel}</span>
+                  <ShapePreview cells={item.cells} color={CLASS_TYPE_COLORS[item.classType]} />
                   <span className="text-subtle text-[10px] shrink-0">{item.grade}</span>
                   <span className="text-[10px] shrink-0 font-medium" style={{ color: CLASS_TYPE_COLORS[item.classType] }}>{item.count}개</span>
                 </div>
@@ -320,13 +471,23 @@ export default function UnionPlacerScreen() {
             <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-bg-card text-subtle hover:text-white transition-colors cursor-pointer"><input type="checkbox" checked={regionSelectMode} onChange={e => { setRegionSelectMode(e.target.checked); setDragMode(null); setIsPointerDown(false) }} className="accent-[rgb(var(--accent))]" />영역 선택</label>
             <div className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white">수동 배치</div>
             <button onClick={runPlannerCalculation} disabled={isSolving || !canRunCalculation} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:opacity-90 transition-opacity disabled:opacity-50">{isSolving ? '계산 중...' : '배치 계산'}</button>
+            <button onClick={clearSolveResultOnly} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-bg-card text-subtle hover:text-white transition-colors">결과 지우기</button>
             <button onClick={resetSelection} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-bg-card text-subtle hover:text-white transition-colors">선택 초기화</button>
           </div>
 
           <div className="w-full max-w-[760px] grid grid-cols-3 gap-2">
-            <div className="bg-bg-card border border-bg-deep rounded-xl px-4 py-3"><div className="text-subtle text-[11px]">배치 가능 총칸</div><div className="text-white text-lg font-bold">{availableTileCount}칸</div></div>
-            <div className="bg-bg-card border border-bg-deep rounded-xl px-4 py-3"><div className="text-subtle text-[11px]">선택/드래그한 칸</div><div className="text-white text-lg font-bold">{plannerCells.length}칸</div></div>
-            <div className="bg-bg-card border border-bg-deep rounded-xl px-4 py-3"><div className="text-subtle text-[11px]">계산 반영 칸</div><div className="text-white text-lg font-bold">{solvedTileCount}칸</div><div className="text-subtle text-[10px] mt-1">시도 {solveTimedOut ? '-' : solveStats.iterations.toLocaleString()}회</div><div className="text-subtle text-[10px]">{solveTimedOut ? `시간 초과(${SOLVER_TIMEOUT_MS}ms)` : `시간 ${solveStats.elapsedMs}ms`}</div></div>
+            <div className="bg-bg-card border border-bg-deep rounded-xl px-4 py-2 text-center flex flex-col items-center justify-center min-h-[84px]">
+              <div className="text-subtle text-[13px] leading-tight">배치 가능 총칸</div>
+              <div className="text-white text-xl font-bold leading-tight mt-1">{availableTileCount}칸</div>
+            </div>
+            <div className="bg-bg-card border border-bg-deep rounded-xl px-4 py-2 text-center flex flex-col items-center justify-center min-h-[84px]">
+              <div className="text-subtle text-[13px] leading-tight">선택/드래그한 칸</div>
+              <div className="text-white text-xl font-bold leading-tight mt-1">{plannerCells.length}칸</div>
+            </div>
+            <div className="bg-bg-card border border-bg-deep rounded-xl px-4 py-3 text-center flex flex-col items-center justify-center">
+              <div className="text-white text-lg font-bold">시도 {solveTimedOut ? '-' : solveStats.iterations.toLocaleString()}회</div>
+              <div className="text-white text-lg font-bold">{solveTimedOut ? `시간 초과(${SOLVER_TIMEOUT_MS}ms)` : `시간 ${solveStats.elapsedMs}ms`}</div>
+            </div>
           </div>
 
           <div className="w-full max-w-[760px] bg-bg-card border border-bg-deep rounded-xl px-4 py-3 text-[11px] min-h-[72px] flex items-start">

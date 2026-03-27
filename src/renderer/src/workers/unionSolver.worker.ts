@@ -1,11 +1,22 @@
-import { PieceInventoryEntry, SelectionSolution, solveSelectedCells, Cell } from '../utils/unionAutoPlacer'
+import {
+  Cell,
+  PieceInventoryEntry,
+  SelectionSolution,
+  SolverVariant,
+  solveSelectedCells,
+  solveSelectedCellsVariant,
+} from '../utils/unionAutoPlacer'
 
 type SolveRequest = {
   selectedCells: Cell[]
   inventoryEntries: PieceInventoryEntry[]
+  variant?: SolverVariant
 }
 
 self.onmessage = (event: MessageEvent<SolveRequest>) => {
-  const result: SelectionSolution = solveSelectedCells(event.data.selectedCells, event.data.inventoryEntries)
+  const { selectedCells, inventoryEntries, variant } = event.data
+  const result: SelectionSolution = typeof variant === 'number'
+    ? solveSelectedCellsVariant(selectedCells, inventoryEntries, variant)
+    : solveSelectedCells(selectedCells, inventoryEntries)
   self.postMessage(result)
 }

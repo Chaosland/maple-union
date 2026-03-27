@@ -73,6 +73,8 @@ export interface SelectionSolution {
   elapsedMs: number
 }
 
+export type SolverVariant = 0 | 1 | 2 | 3
+
 export interface SelectableRegion {
   id: string
   label: EffectLabel
@@ -1906,9 +1908,9 @@ function rotateBoardLeft(board: number[][]): number[][] {
 }
 
 function unrotatePoint(point: SolverPoint, variant: number): SolverPoint {
-  if (variant === 1) return new SolverPoint(point.y, BOARD_COLS - 1 - point.x)
+  if (variant === 1) return new SolverPoint(point.y, BOARD_ROWS - 1 - point.x)
   if (variant === 2) return new SolverPoint(BOARD_COLS - 1 - point.x, BOARD_ROWS - 1 - point.y)
-  if (variant === 3) return new SolverPoint(BOARD_ROWS - 1 - point.y, point.x)
+  if (variant === 3) return new SolverPoint(BOARD_COLS - 1 - point.y, point.x)
   return new SolverPoint(point.x, point.y)
 }
 
@@ -1930,61 +1932,112 @@ function convertSelectionBoard(selectedCells: Cell[]): number[][] {
   return board
 }
 
-function solveWithPortedSolver(selectedCells: Cell[], inventoryEntries: PieceInventoryEntry[]): SelectionSolution {
-  const startedAt = Date.now()
-  if (selectedCells.length === 0) return { placements: [], usedTiles: 0, remainingTiles: 0, success: true, iterations: 0, elapsedMs: 0 }
+function hasLongSpaces(board: number[][]): boolean {
+  for (let row = 0; row < board.length; row++) {
+    for (let col = 0; col < board[0].length; col++) {
+      const hasVerticalLongSpace = board[row + 1]?.[col] === 0
+        && board[row - 1]?.[col] === 0
+        && board[row]?.[col + 1] !== 0
+        && board[row]?.[col - 1] !== 0
+      if (hasVerticalLongSpace) return true
 
-  const baseBoard = convertSelectionBoard(selectedCells)
-  const solvers = [new PortedLegionSolver(baseBoard, createSolverPieces(inventoryEntries))]
-  if (solvers[0].longSpaces.length !== 0) {
-    solvers.push(new PortedLegionSolver(rotateBoardRight(baseBoard), createSolverPieces(inventoryEntries)))
-    solvers.push(new PortedLegionSolver(rotateBoard180(baseBoard), createSolverPieces(inventoryEntries)))
-    solvers.push(new PortedLegionSolver(rotateBoardLeft(baseBoard), createSolverPieces(inventoryEntries)))
-  }
-
-  let bestSolver: PortedLegionSolver | null = null
-  let bestVariant = 0
-  for (let i = 0; i < solvers.length; i++) {
-    const success = solvers[i].solve()
-    if (success) {
-      bestSolver = solvers[i]
-      bestVariant = i
-      break
-    }
-    if (!bestSolver || solvers[i].iterations > bestSolver.iterations) {
-      bestSolver = solvers[i]
-      bestVariant = i
+      const hasHorizontalLongSpace = board[row + 1]?.[col] !== 0
+        && board[row - 1]?.[col] !== 0
+        && board[row]?.[col + 1] === 0
+        && board[row]?.[col - 1] === 0
+      if (hasHorizontalLongSpace) return true
     }
   }
 
-  const placements = (bestSolver?.history ?? []).map((piece, index) => {
-    const sample = bestSolver!.board[piece[0].y][piece[0].x]
+  return false
+}
+
+function getBoardForVariant(board: number[][], variant: SolverVariant): number[][] {
+  if (variant === 1) return rotateBoardRight(board)
+  if (variant === 2) return rotateBoard180(board)
+  if (variant === 3) return rotateBoardLeft(board)
+  return board
+}
+
+function extractSolvedPlacements(solver: PortedLegionSolver, variant: SolverVariant): SolvedPlacement[] {
+  return solver.history.map((piece, index) => {
+    const sample = solver.board[piece[0].y][piece[0].x]
     const pieceId = sample > 18 ? sample - 18 : sample
-    const meta = bestSolver!.pieces.find(item => item.id === pieceId)?.meta ?? {
+    const meta = solver.pieces.find(item => item.id === pieceId)?.meta ?? {
       inventoryKey: `unknown:${index}`,
       label: '알 수 없음',
       classType: 'warrior' as ClassType,
       grade: 'B' as UnionBlockGrade,
     }
+
     return {
       ...meta,
       cells: piece.map(point => {
-        const restored = unrotatePoint(point, bestVariant)
+        const restored = unrotatePoint(point, variant)
         return { x: restored.x, y: restored.y }
       }),
     }
   })
+}
 
+function isBetterSelectionSolution(candidate: SelectionSolution, current: SelectionSolution | null): boolean {
+  if (!current) return true
+  if (candidate.success !== current.success) return candidate.success
+  if (candidate.usedTiles !== current.usedTiles) return candidate.usedTiles > current.usedTiles
+  if (candidate.remainingTiles !== current.remainingTiles) return candidate.remainingTiles < current.remainingTiles
+  return candidate.iterations > current.iterations
+}
+
+export function getSolveVariants(selectedCells: Cell[]): SolverVariant[] {
+  if (selectedCells.length === 0) return [0]
+  const baseBoard = convertSelectionBoard(selectedCells)
+  return hasLongSpaces(baseBoard) ? [0, 1, 2, 3] : [0]
+}
+
+export function solveSelectedCellsVariant(
+  selectedCells: Cell[],
+  inventoryEntries: PieceInventoryEntry[],
+  variant: SolverVariant = 0
+): SelectionSolution {
+  const startedAt = Date.now()
+  if (selectedCells.length === 0) return { placements: [], usedTiles: 0, remainingTiles: 0, success: true, iterations: 0, elapsedMs: 0 }
+
+  const baseBoard = convertSelectionBoard(selectedCells)
+  const solver = new PortedLegionSolver(getBoardForVariant(baseBoard, variant), createSolverPieces(inventoryEntries))
+  solver.solve()
+
+  const placements = extractSolvedPlacements(solver, variant)
   const usedTiles = placements.reduce((sum, placement) => sum + placement.cells.length, 0)
   const remainingTiles = Math.max(0, selectedCells.length - usedTiles)
-  const iterations = solvers.reduce((sum, solver) => sum + solver.iterations, 0)
 
   return {
     placements,
     usedTiles,
     remainingTiles,
-    success: bestSolver?.success === true && remainingTiles === 0,
-    iterations,
+    success: solver.success === true && remainingTiles === 0,
+    iterations: solver.iterations,
+    elapsedMs: Date.now() - startedAt,
+  }
+}
+
+function solveWithPortedSolver(selectedCells: Cell[], inventoryEntries: PieceInventoryEntry[]): SelectionSolution {
+  const startedAt = Date.now()
+  if (selectedCells.length === 0) return { placements: [], usedTiles: 0, remainingTiles: 0, success: true, iterations: 0, elapsedMs: 0 }
+
+  let totalIterations = 0
+  let bestSolution: SelectionSolution | null = null
+
+  for (const variant of getSolveVariants(selectedCells)) {
+    const attempt = solveSelectedCellsVariant(selectedCells, inventoryEntries, variant)
+    totalIterations += attempt.iterations
+
+    if (isBetterSelectionSolution(attempt, bestSolution)) bestSolution = attempt
+    if (attempt.success) break
+  }
+
+  return {
+    ...(bestSolution ?? { placements: [], usedTiles: 0, remainingTiles: selectedCells.length, success: false, iterations: 0, elapsedMs: 0 }),
+    iterations: totalIterations,
     elapsedMs: Date.now() - startedAt,
   }
 }

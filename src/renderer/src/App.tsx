@@ -18,8 +18,19 @@ export default function App() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [page, setPage]               = useState<Page>('union-status')
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
 
   useEffect(() => { initialize() }, [])
+
+  const handleCheckUpdate = async () => {
+    if (!window.api?.updates?.check || checkingUpdate) return
+    setCheckingUpdate(true)
+    try {
+      await window.api.updates.check()
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
 
   // ── 초기화 중 ────────────────────────────────────────────────────────────
   if (status === 'init') {
@@ -88,20 +99,34 @@ export default function App() {
         {/* 사이드바 하단: 테마 토글 */}
         <div className="px-3 py-3 border-t border-bg-deep">
           <button
-            onClick={toggleTheme}
+            onClick={() => void handleCheckUpdate()}
+            disabled={checkingUpdate}
             className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-muted
+                       hover:bg-bg-deep hover:text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            title="GitHub 최신 릴리스 확인"
+          >
+            <span className="inline-flex w-5 shrink-0 items-center justify-center text-base leading-none">
+              {checkingUpdate ? '⟳' : '⬆'}
+            </span>
+            <span className="flex-1 text-left">{checkingUpdate ? '업데이트 확인 중' : '업데이트 체크'}</span>
+          </button>
+          <button
+            onClick={toggleTheme}
+            className="mt-2 w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-muted
                        hover:bg-bg-deep hover:text-white transition-colors"
           >
-            <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
-            {theme === 'dark' ? '라이트 모드' : '다크 모드'}
+            <span className="inline-flex w-5 shrink-0 items-center justify-center text-base leading-none">
+              {theme === 'dark' ? '☀️' : '🌙'}
+            </span>
+            <span className="flex-1 text-left">{theme === 'dark' ? '라이트 모드' : '다크 모드'}</span>
           </button>
           <button
             onClick={() => window.open('https://ko-fi.com/chaosland', '_blank', 'noopener,noreferrer')}
             className="mt-2 w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-muted
                        hover:bg-bg-deep hover:text-white transition-colors"
           >
-            <span>☕</span>
-            후원하기
+            <span className="inline-flex w-5 shrink-0 items-center justify-center text-base leading-none">☕</span>
+            <span className="flex-1 text-left">후원하기</span>
           </button>
         </div>
       </aside>

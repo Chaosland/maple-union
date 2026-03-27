@@ -577,8 +577,275 @@ function solveWithPortedSolver(selectedCells: Cell[], inventoryEntries: PieceInv
   }
 }
 
+const MAX_STEPS = 600_000
+
+function solveSelectionExact(selectedCells: Cell[], inventoryEntries: PieceInventoryEntry[]): SelectionSolution {
+  if (selectedCells.length === 0) {
+    return { placements: [], usedTiles: 0, remainingTiles: 0, success: true, iterations: 0, elapsedMs: 0 }
+  }
+
+  type Variant = 'identity' | 'flip-x' | 'flip-y' | 'flip-both'
+  type IndexedPlacement = {
+    inventoryIndex: number
+    cellIndices: number[]
+    criticalCount: number
+    centerCount: number
+    placement: SolvedPlacement
+  }
+
+  function transformCell(cell: Cell, variant: Variant): Cell {
+    switch (variant) {
+      case 'flip-x': return { x: BOARD_COLS - 1 - cell.x, y: cell.y }
+      case 'flip-y': return { x: cell.x, y: BOARD_ROWS - 1 - cell.y }
+      case 'flip-both': return { x: BOARD_COLS - 1 - cell.x, y: BOARD_ROWS - 1 - cell.y }
+      default: return cell
+    }
+  }
+  const untransformCell = transformCell
+
+  function solveVariant(variant: Variant, budget: { steps: number }): SelectionSolution {
+    const transformedSelected = selectedCells.map(cell => transformCell(cell, variant))
+    const cellKeyToIndex = new Map<string, number>()
+    const indexToCell: Cell[] = []
+    transformedSelected.forEach((cell, index) => {
+      cellKeyToIndex.set(`${cell.x},${cell.y}`, index)
+      indexToCell[index] = cell
+    })
+
+    const selectedSet = new Set(transformedSelected.map(cell => `${cell.x},${cell.y}`))
+    const degreeByCell = new Array<number>(transformedSelected.length).fill(0)
+    transformedSelected.forEach((cell, index) => {
+      degreeByCell[index] = [
+        `${cell.x + 1},${cell.y}`, `${cell.x - 1},${cell.y}`,
+        `${cell.x},${cell.y + 1}`, `${cell.x},${cell.y - 1}`,
+      ].filter(k => selectedSet.has(k)).length
+    })
+
+    const centerCellSet = new Set<number>(
+      transformedSelected.flatMap((cell, index) =>
+        isCenterCrossCell(cell.y, cell.x) ? [index] : []
+      )
+    )
+
+    const criticalCellSet = new Set<number>(
+      transformedSelected.flatMap((cell, index) =>
+        isCenterCrossCell(cell.y, cell.x) || degreeByCell[index] <= 2 ? [index] : []
+      )
+    )
+
+    const placements: IndexedPlacement[] = []
+    const placementsByCell = Array.from({ length: transformedSelected.length }, () => [] as number[])
+
+    inventoryEntries.forEach((item, inventoryIndex) => {
+      const seen = new Set<string>()
+      for (const transform of getShapeTransforms(item.cells)) {
+        for (const anchorKey of cellKeyToIndex.keys()) {
+          const [anchorX, anchorY] = anchorKey.split(',').map(Number)
+          for (const pivot of transform) {
+            const dx = anchorX - pivot.x
+            const dy = anchorY - pivot.y
+            const placedCells = transform.map(c => ({ x: c.x + dx, y: c.y + dy }))
+            const indices: number[] = []
+            let valid = true
+            for (const c of placedCells) {
+              const idx = cellKeyToIndex.get(`${c.x},${c.y}`)
+              if (idx === undefined) { valid = false; break }
+              indices.push(idx)
+            }
+            if (!valid) continue
+            indices.sort((a, b) => a - b)
+            const dedupeKey = `${inventoryIndex}:${indices.join(',')}`
+            if (seen.has(dedupeKey)) continue
+            seen.add(dedupeKey)
+
+            const pIdx = placements.length
+            placements.push({
+              inventoryIndex,
+              cellIndices: indices,
+              criticalCount: indices.filter(i => criticalCellSet.has(i)).length,
+              centerCount: indices.filter(i => centerCellSet.has(i)).length,
+              placement: {
+                inventoryKey: item.key,
+                label: item.label,
+                classType: item.classType,
+                grade: item.grade,
+                cells: indices.map(i => indexToCell[i]),
+              },
+            })
+            indices.forEach(i => placementsByCell[i].push(pIdx))
+          }
+        }
+      }
+    })
+
+    const remaining = new Array<boolean>(transformedSelected.length).fill(true)
+    const inventoryCounts = inventoryEntries.map(item => item.count)
+    const current: IndexedPlacement[] = []
+    let iterations = 0
+    let best: SelectionSolution = {
+      placements: [],
+      usedTiles: 0,
+      remainingTiles: transformedSelected.length,
+      success: false,
+      iterations: 0,
+      elapsedMs: 0,
+    }
+    const memo = new Map<string, number>()
+
+    function remainingCapacity(): number {
+      return inventoryEntries.reduce((sum, item, i) => sum + item.cells.length * inventoryCounts[i], 0)
+    }
+
+    function maybeUpdateBest() {
+      const usedTiles = current.reduce((s, p) => s + p.cellIndices.length, 0)
+      const remainingTiles = transformedSelected.length - usedTiles
+      if (
+        remainingTiles < best.remainingTiles ||
+        (remainingTiles === best.remainingTiles && usedTiles > best.usedTiles)
+      ) {
+        best = {
+          placements: current.map(entry => ({
+            ...entry.placement,
+            cells: entry.placement.cells.map(c => untransformCell(c, variant)),
+          })),
+          usedTiles,
+          remainingTiles,
+          success: remainingTiles === 0,
+          iterations,
+          elapsedMs: 0,
+        }
+      }
+    }
+
+    function chooseNextCell(): number {
+      const unresolvedCenter = [...centerCellSet].filter(i => remaining[i])
+      if (unresolvedCenter.length > 0) {
+        return unresolvedCenter.sort((a, b) => {
+          const ca = indexToCell[a]
+          const cb = indexToCell[b]
+          return ca.y - cb.y || ca.x - cb.x
+        })[0]
+      }
+
+      const unresolvedCritical = [...criticalCellSet].filter(i => remaining[i] && !centerCellSet.has(i))
+      const candidates = unresolvedCritical.length > 0
+        ? unresolvedCritical
+        : remaining.flatMap((v, i) => (v ? [i] : []))
+
+      let bestCell = -1
+      let bestOptionCount = Infinity
+      let bestDegree = Infinity
+      for (const ci of candidates) {
+        let optionCount = 0
+        for (const pIdx of placementsByCell[ci]) {
+          const p = placements[pIdx]
+          if (inventoryCounts[p.inventoryIndex] <= 0) continue
+          if (p.cellIndices.every(i => remaining[i])) optionCount++
+        }
+        if (optionCount < bestOptionCount || (optionCount === bestOptionCount && degreeByCell[ci] < bestDegree)) {
+          bestOptionCount = optionCount
+          bestDegree = degreeByCell[ci]
+          bestCell = ci
+          if (bestOptionCount <= 1) break
+        }
+      }
+      return bestCell
+    }
+
+    function stateKey(nextCell: number): string {
+      const bits: string[] = []
+      for (let offset = 0; offset < remaining.length; offset += 32) {
+        let b = 0
+        for (let bit = 0; bit < 32 && offset + bit < remaining.length; bit++) {
+          if (remaining[offset + bit]) b |= (1 << bit)
+        }
+        bits.push(b.toString(36))
+      }
+      return `${variant}|${nextCell}|${bits.join('.')}|${inventoryCounts.join(',')}`
+    }
+
+    function search(): boolean {
+      if (budget.steps <= 0) return best.remainingTiles === 0
+      iterations++
+      maybeUpdateBest()
+      if (best.remainingTiles === 0) return true
+      if (remainingCapacity() < best.remainingTiles) return false
+
+      const nextCell = chooseNextCell()
+      if (nextCell < 0) return true
+
+      const key = stateKey(nextCell)
+      const currentRemaining = remaining.filter(Boolean).length
+      const memoBest = memo.get(key)
+      if (memoBest !== undefined && memoBest <= currentRemaining) return false
+      memo.set(key, currentRemaining)
+
+      const inCenterPhase = centerCellSet.has(nextCell)
+      const options = placementsByCell[nextCell]
+        .map(i => placements[i])
+        .filter(p => inventoryCounts[p.inventoryIndex] > 0 && p.cellIndices.every(i => remaining[i]))
+        .sort((a, b) => {
+          if (inCenterPhase) {
+            if (b.centerCount !== a.centerCount) return b.centerCount - a.centerCount
+            return b.cellIndices.length - a.cellIndices.length
+          }
+          if (b.criticalCount !== a.criticalCount) return b.criticalCount - a.criticalCount
+          if (b.cellIndices.length !== a.cellIndices.length) return b.cellIndices.length - a.cellIndices.length
+          return a.inventoryIndex - b.inventoryIndex
+        })
+
+      for (const p of options) {
+        budget.steps--
+        inventoryCounts[p.inventoryIndex] -= 1
+        p.cellIndices.forEach(i => { remaining[i] = false })
+        current.push(p)
+        if (search()) return true
+        current.pop()
+        p.cellIndices.forEach(i => { remaining[i] = true })
+        inventoryCounts[p.inventoryIndex] += 1
+      }
+
+      return false
+    }
+
+    search()
+    return best
+  }
+
+  const startedAt = Date.now()
+  const budget = { steps: MAX_STEPS }
+  let best = solveVariant('identity', budget)
+  if (!best.success) {
+    for (const variant of ['flip-x', 'flip-y', 'flip-both'] as const) {
+      if (budget.steps <= 0) break
+      const candidate = solveVariant(variant, budget)
+      if (
+        candidate.remainingTiles < best.remainingTiles ||
+        (candidate.remainingTiles === best.remainingTiles && candidate.usedTiles > best.usedTiles)
+      ) {
+        best = candidate
+      }
+      if (best.success) break
+    }
+  }
+  best.elapsedMs = Date.now() - startedAt
+  return best
+}
+
 function solveSelectedCells(selectedCells: Cell[], inventoryEntries: PieceInventoryEntry[]): SelectionSolution {
-  return solveWithPortedSolver(selectedCells, inventoryEntries)
+  const ported = solveWithPortedSolver(selectedCells, inventoryEntries)
+  if (ported.success) return ported
+
+  const exact = solveSelectionExact(selectedCells, inventoryEntries)
+  if (exact.success) return exact
+
+  if (
+    exact.remainingTiles < ported.remainingTiles ||
+    (exact.remainingTiles === ported.remainingTiles && exact.usedTiles > ported.usedTiles)
+  ) {
+    return exact
+  }
+  return ported
 }
 
 // ── Cloudflare Pages Function ─────────────────────────────────────────────────

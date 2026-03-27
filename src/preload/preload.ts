@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+interface UpdateCheckResult {
+  ok: boolean
+  currentVersion: string
+  latestVersion: string | null
+  latestUrl: string | null
+  updateAvailable: boolean
+  message: string
+  error?: string
+}
+
 contextBridge.exposeInMainWorld('api', {
   creds: {
     save:   (key: string): Promise<{ ok: boolean; error?: string }> =>
@@ -23,6 +33,9 @@ contextBridge.exposeInMainWorld('api', {
     getCharacterBasic:(ocid: string): Promise<IpcResult> => ipcRenderer.invoke('nexon:characterBasic', ocid),
     getUnionInfo:     (ocid: string): Promise<IpcResult> => ipcRenderer.invoke('nexon:unionInfo', ocid),
     getUnionRaider:   (ocid: string): Promise<IpcResult> => ipcRenderer.invoke('nexon:unionRaider', ocid)
+  },
+  updates: {
+    check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check')
   }
 })
 

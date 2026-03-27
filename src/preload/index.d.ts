@@ -4,6 +4,16 @@ interface IpcResult<T = unknown> {
   error?: string
 }
 
+interface UpdateCheckResult {
+  ok: boolean
+  currentVersion: string
+  latestVersion: string | null
+  latestUrl: string | null
+  updateAvailable: boolean
+  message: string
+  error?: string
+}
+
 interface Window {
   api: {
     creds: {
@@ -20,6 +30,9 @@ interface Window {
       getCharacterBasic(ocid: string): Promise<IpcResult>
       getUnionInfo(ocid: string): Promise<IpcResult>
       getUnionRaider(ocid: string): Promise<IpcResult>
+    }
+    updates: {
+      check(): Promise<UpdateCheckResult>
     }
   }
 }

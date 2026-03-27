@@ -1,14 +1,23 @@
-name: Deploy to Cloudflare Pages
+name: Build Electron Distribution
 
 on:
+  workflow_dispatch:
   push:
     branches:
-      - maple-union-webapp
+      - main
+    tags:
+      - 'v*'
+  release:
+    types:
+      - published
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    name: Build & Deploy
+  build:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,12 +31,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
-        run: npm run build
+      - name: Build distributable
+        run: npm run dist
 
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
+      - name: Upload workflow artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=maple-union --commit-dirty=true --commit-message=deploy
+          name: maple-union-installer
+          path: release/*
+
+      - name: Upload to GitHub Release
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+          files: release/*
+          fail_on_unmatched_files: true
