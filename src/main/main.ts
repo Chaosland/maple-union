@@ -18,7 +18,12 @@ const preloadPath = existsSync(join(__dirname, 'preload.js'))
   ? join(__dirname, 'preload.js')
   : join(__dirname, 'preload.mjs')
 const rendererIndexPath = join(__dirname, '../dist/index.html')
-const windowIconPath = join(__dirname, '../build/icon.png')
+const windowIconCandidates = [
+  join(process.resourcesPath, 'build', 'icon.ico'),
+  join(__dirname, '../build/icon.ico'),
+  join(__dirname, '../build/icon.png')
+]
+const windowIconPath = windowIconCandidates.find(path => existsSync(path))
 
 interface UpdateCheckResult {
   ok: boolean
@@ -179,7 +184,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: '메이플 유니온 도우미',
-    ...(existsSync(windowIconPath) ? { icon: windowIconPath } : {}),
+    ...(windowIconPath ? { icon: windowIconPath } : {}),
     webPreferences: {
       preload: preloadPath,
       sandbox: false,

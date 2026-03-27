@@ -55,6 +55,12 @@
       "output": "release",
       "buildResources": "build"
     },
+    "extraResources": [
+      {
+        "from": "build/icon.ico",
+        "to": "build/icon.ico"
+      }
+    ],
     "files": [
       "dist/**/*",
       "dist-electron/**/*"

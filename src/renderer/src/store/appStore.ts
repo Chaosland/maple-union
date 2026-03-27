@@ -46,8 +46,14 @@ type CharLike = {
 }
 
 async function apiFetch(path: string): Promise<{ ok: boolean; data?: unknown; error?: string }> {
-  // Electron(EXE) 환경: /api 프록시 대신 main IPC 경로 사용
-  if (window.api?.nexon && path.startsWith('/api/nexon/maplestory/v1/')) {
+  const isElectronRuntime = typeof window !== 'undefined' && !!window.api
+  const isPackagedRuntime = typeof window !== 'undefined' && window.location?.protocol === 'file:'
+
+  // Nexon 경로는 Electron에서 fetch(/api/...)로 처리하지 않고 IPC만 사용
+  if (path.startsWith('/api/nexon/maplestory/v1/')) {
+    if (!(window.api?.nexon)) {
+      return { ok: false, error: 'Electron IPC(nexon)가 초기화되지 않았습니다. 앱을 재시작해 주세요.' }
+    }
     try {
       const url = new URL(path, 'http://localhost')
       const pathname = url.pathname
@@ -78,6 +84,11 @@ async function apiFetch(path: string): Promise<{ ok: boolean; data?: unknown; er
     } catch (e) {
       return { ok: false, error: String(e) }
     }
+  }
+
+  // EXE(file://)나 Electron 런타임에서는 상대 /api fetch를 타지 않도록 차단
+  if ((isElectronRuntime || isPackagedRuntime) && path.startsWith('/api/')) {
+    return { ok: false, error: `IPC 경로가 필요한 요청입니다: ${path}` }
   }
 
   try {
@@ -172,7 +183,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
   recommendation: null,
 
   initialize: async () => {
-    const hasKey = !!getApiKey()
+    const localKey = getApiKey()
+    let hasKey = !!localKey
+    if (window.api?.creds?.hasKey) {
+      try {
+        const ipcHasKey = await window.api.creds.hasKey()
+        hasKey = hasKey || ipcHasKey
+        // 기존 localStorage 키가 있고 main 저장소 키가 비어있으면 동기화
+        if (localKey && !ipcHasKey && window.api?.creds?.save) {
+          await window.api.creds.save(localKey)
+          hasKey = true
+        }
+      } catch {
+        // ignore: fallback to local key
+      }
+    }
     const saved  = loadSaved()
     set({ status: hasKey ? 'ready' : 'no-key', savedCharacters: saved })
     // API 키가 있으면 재시작 시 자동으로 전체 불러오기
@@ -182,7 +207,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   saveCredentials: async ({ serviceKey }) => {
-    localStorage.setItem(API_KEY_STORAGE, serviceKey.trim())
+    const trimmed = serviceKey.trim()
+    localStorage.setItem(API_KEY_STORAGE, trimmed)
+    if (window.api?.creds?.save) {
+      const result = await window.api.creds.save(trimmed)
+      if (!result.ok) {
+        set({ error: result.error ?? 'API 키 저장 실패' })
+        return false
+      }
+    }
     set({ status: 'ready', error: null })
     // 최초 등록 시 자동 전체 불러오기
     get().loadAllCharacters()
@@ -191,6 +224,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   clearCredentials: async () => {
     localStorage.removeItem(API_KEY_STORAGE)
+    if (window.api?.creds?.clear) {
+      await window.api.creds.clear()
+    }
     set({
       status: 'no-key', savedCharacters: [], mainCharsByWorld: {},
       selectedCharacter: null, unionInfo: null, unionRaider: null, recommendation: null
@@ -243,6 +279,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
         }
         rawPayload = { ok: true, data: result.data }
       } else {
+        // EXE에서 preload/window.api가 없는 비정상 상태면 즉시 명확한 에러 반환
+        if (window.location?.protocol === 'file:') {
+          set({ error: 'Electron IPC(chars:loadAll)가 없습니다. 앱을 완전히 종료 후 다시 실행해 주세요.' })
+          return
+        }
         // 웹/API 경로: /api/charlist
         const res = await fetch('/api/charlist', {
           headers: apiHeaders(),
