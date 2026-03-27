@@ -1,14 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-interface UpdateCheckResult {
-  ok: boolean
-  currentVersion: string
-  latestVersion: string | null
-  latestUrl: string | null
-  updateAvailable: boolean
-  message: string
-  error?: string
-}
+export type UpdaterState =
+  | { status: 'checking' }
+  | { status: 'available'; version: string }
+  | { status: 'not-available'; version: string }
+  | { status: 'downloading'; percent: number }
+  | { status: 'downloaded'; version: string }
+  | { status: 'error'; error: string }
 
 contextBridge.exposeInMainWorld('api', {
   creds: {
@@ -36,7 +34,14 @@ contextBridge.exposeInMainWorld('api', {
     loadAllCharacters:(): Promise<IpcResult> => ipcRenderer.invoke('nexon:loadAllCharacters')
   },
   updates: {
-    check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check')
+    check:    (): Promise<void> => ipcRenderer.invoke('updates:check'),
+    download: (): Promise<void> => ipcRenderer.invoke('updates:download'),
+    install:  (): Promise<void> => ipcRenderer.invoke('updates:install'),
+    onState: (cb: (state: UpdaterState) => void) => {
+      const fn = (_: unknown, state: UpdaterState) => cb(state)
+      ipcRenderer.on('updater:state', fn)
+      return () => ipcRenderer.removeListener('updater:state', fn)
+    }
   }
 })
 

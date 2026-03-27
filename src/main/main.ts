@@ -1,4 +1,5 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, Notification } from 'electron'
+import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { existsSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -10,10 +11,6 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
 const shouldOpenDevTools = process.env.OPEN_DEVTOOLS === '1'
-const UPDATE_REPO_OWNER = 'Chaosland'
-const UPDATE_REPO_NAME = 'maple-union'
-const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPO_OWNER}/${UPDATE_REPO_NAME}/releases/latest`
-const UPDATE_RELEASE_URL = `https://github.com/${UPDATE_REPO_OWNER}/${UPDATE_REPO_NAME}/releases/latest`
 // 패키징 시 preload는 asarUnpack으로 asar 외부에 위치 → app.asar.unpacked 경로 사용
 // 개발 시에는 dist-electron/preload.js를 직접 참조
 const preloadPath = app.isPackaged
@@ -27,154 +24,43 @@ const windowIconCandidates = [
 ]
 const windowIconPath = windowIconCandidates.find(path => existsSync(path))
 
-interface UpdateCheckResult {
-  ok: boolean
-  currentVersion: string
-  latestVersion: string | null
-  latestUrl: string | null
-  updateAvailable: boolean
-  message: string
-  error?: string
+// ── 업데이터 상태 타입 ─────────────────────────────────────────────────────────
+type UpdaterState =
+  | { status: 'checking' }
+  | { status: 'available'; version: string }
+  | { status: 'not-available'; version: string }
+  | { status: 'downloading'; percent: number }
+  | { status: 'downloaded'; version: string }
+  | { status: 'error'; error: string }
+
+function sendUpdaterState(state: UpdaterState): void {
+  BrowserWindow.getAllWindows()[0]?.webContents.send('updater:state', state)
 }
 
-function parseVersion(version: string): number[] | null {
-  const normalized = version.trim().replace(/^v/i, '')
-  const parts = normalized.split('.').map(part => Number.parseInt(part, 10))
-  if (parts.length < 2 || parts.some(part => Number.isNaN(part) || part < 0)) return null
-  while (parts.length < 3) parts.push(0)
-  return parts.slice(0, 3)
-}
+function setupAutoUpdater(): void {
+  if (isDev) return
 
-function compareVersions(a: string, b: string): number | null {
-  const va = parseVersion(a)
-  const vb = parseVersion(b)
-  if (!va || !vb) return null
-  for (let i = 0; i < Math.max(va.length, vb.length); i++) {
-    const diff = (va[i] ?? 0) - (vb[i] ?? 0)
-    if (diff !== 0) return diff
-  }
-  return 0
-}
+  autoUpdater.autoDownload = false       // 사용자 확인 후 다운로드
+  autoUpdater.autoInstallOnAppQuit = true // 종료 시 자동 설치
 
-async function fetchLatestRelease(): Promise<{ tagName: string; htmlUrl: string }> {
-  const res = await fetch(UPDATE_API_URL, {
-    headers: {
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'maple-union'
-    }
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdaterState({ status: 'checking' })
   })
-
-  if (!res.ok) {
-    throw new Error(`GitHub release 조회 실패 (${res.status})`)
-  }
-
-  const json = await res.json() as { tag_name?: string; html_url?: string }
-  if (!json.tag_name || !json.html_url) {
-    throw new Error('GitHub release 응답 형식이 올바르지 않습니다')
-  }
-
-  return { tagName: json.tag_name, htmlUrl: json.html_url }
-}
-
-function notifyNewVersion(currentVersion: string, latestVersion: string, latestUrl: string): void {
-  const notification = new Notification({
-    title: '업데이트가 있습니다',
-    body: `현재 ${currentVersion}, 최신 ${latestVersion}`,
-    silent: false
+  autoUpdater.on('update-available', info => {
+    sendUpdaterState({ status: 'available', version: info.version })
   })
-
-  notification.on('click', () => {
-    shell.openExternal(latestUrl)
+  autoUpdater.on('update-not-available', () => {
+    sendUpdaterState({ status: 'not-available', version: app.getVersion() })
   })
-
-  notification.show()
-}
-
-async function checkForUpdates(options: { openReleaseOnUpdate: boolean; notifyOnUpdate: boolean; showResultDialog: boolean }): Promise<UpdateCheckResult> {
-  const currentVersion = app.getVersion()
-
-  try {
-    const latest = await fetchLatestRelease()
-    const compare = compareVersions(currentVersion, latest.tagName)
-    if (compare === null) {
-      const result: UpdateCheckResult = {
-        ok: false,
-        currentVersion,
-        latestVersion: latest.tagName,
-        latestUrl: latest.htmlUrl,
-        updateAvailable: false,
-        message: '버전 비교 실패'
-      }
-      if (options.showResultDialog) {
-        await dialog.showMessageBox({
-          type: 'warning',
-          buttons: ['확인'],
-          title: '업데이트 체크',
-          message: '버전 비교에 실패했습니다.',
-          detail: `현재 버전: ${currentVersion}\n최신 버전: ${latest.tagName}`
-        })
-      }
-      return result
-    }
-
-    const updateAvailable = compare < 0
-    if (updateAvailable) {
-      if (options.notifyOnUpdate) {
-        notifyNewVersion(currentVersion, latest.tagName, latest.htmlUrl)
-      }
-      if (options.openReleaseOnUpdate) {
-        shell.openExternal(latest.htmlUrl)
-      }
-      return {
-        ok: true,
-        currentVersion,
-        latestVersion: latest.tagName,
-        latestUrl: latest.htmlUrl,
-        updateAvailable: true,
-        message: '새 버전이 있습니다'
-      }
-    }
-
-    if (options.showResultDialog) {
-      await dialog.showMessageBox({
-        type: 'info',
-        buttons: ['확인'],
-        title: '업데이트 체크',
-        message: '이미 최신 버전입니다.',
-        detail: `현재 버전: ${currentVersion}`
-      })
-    }
-
-    return {
-      ok: true,
-      currentVersion,
-      latestVersion: latest.tagName,
-      latestUrl: latest.htmlUrl,
-      updateAvailable: false,
-      message: '최신 버전입니다'
-    }
-  } catch (error) {
-    const message = String(error)
-    if (options.showResultDialog) {
-      await dialog.showMessageBox({
-        type: 'error',
-        buttons: ['확인'],
-        title: '업데이트 체크 실패',
-        message: '업데이트 정보를 확인하지 못했습니다.',
-        detail: message
-      })
-    }
-    return {
-      ok: false,
-      currentVersion,
-      latestVersion: null,
-      latestUrl: null,
-      updateAvailable: false,
-      message,
-      error: message
-    }
-  }
+  autoUpdater.on('download-progress', progress => {
+    sendUpdaterState({ status: 'downloading', percent: Math.round(progress.percent) })
+  })
+  autoUpdater.on('update-downloaded', info => {
+    sendUpdaterState({ status: 'downloaded', version: info.version })
+  })
+  autoUpdater.on('error', err => {
+    sendUpdaterState({ status: 'error', error: err.message })
+  })
 }
 
 function createWindow(): void {
@@ -194,7 +80,15 @@ function createWindow(): void {
     }
   })
 
-  win.on('ready-to-show', () => win.show())
+  win.on('ready-to-show', () => {
+    win.show()
+    // 앱 시작 3초 후 조용히 업데이트 체크
+    if (!isDev) {
+      setTimeout(() => {
+        autoUpdater.checkForUpdates().catch(() => {})
+      }, 3000)
+    }
+  })
   win.webContents.on('before-input-event', (event, input) => {
     const isDevToolsShortcut =
       input.key === 'F12' ||
@@ -270,23 +164,34 @@ function registerIpcHandlers(): void {
     }
   })
 
+  // ── 업데이트 ──────────────────────────────────────────────────────────────
   ipcMain.handle('updates:check', async () => {
-    return checkForUpdates({
-      openReleaseOnUpdate: true,
-      notifyOnUpdate: false,
-      showResultDialog: true
-    })
+    if (isDev) {
+      sendUpdaterState({ status: 'not-available', version: app.getVersion() })
+      return
+    }
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch (e) {
+      sendUpdaterState({ status: 'error', error: String(e) })
+    }
+  })
+  ipcMain.handle('updates:download', async () => {
+    try {
+      await autoUpdater.downloadUpdate()
+    } catch (e) {
+      sendUpdaterState({ status: 'error', error: String(e) })
+    }
+  })
+  ipcMain.handle('updates:install', () => {
+    autoUpdater.quitAndInstall()
   })
 }
 
 app.whenReady().then(() => {
+  setupAutoUpdater()
   registerIpcHandlers()
   createWindow()
-  void checkForUpdates({
-    openReleaseOnUpdate: false,
-    notifyOnUpdate: true,
-    showResultDialog: false
-  })
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

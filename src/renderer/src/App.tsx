@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from './store/appStore'
 import { useTheme } from './hooks/useTheme'
 import ApiKeyScreen from './screens/ApiKeyScreen'
@@ -6,6 +6,14 @@ import CharacterListScreen from './screens/CharacterListScreen'
 import UnionPlacerScreen from './screens/UnionPlacerScreen'
 
 type Page = 'union-status' | 'union-placer'
+
+type UpdaterStatus = 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+interface UpdaterState {
+  status: UpdaterStatus
+  version?: string
+  percent?: number
+  error?: string
+}
 
 const NAV_ITEMS: { id: Page; icon: string; label: string }[] = [
   { id: 'union-status', icon: '🏆', label: '서버별 유니온 현황' },
@@ -18,18 +26,41 @@ export default function App() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [page, setPage]               = useState<Page>('union-status')
-  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [updater, setUpdater]         = useState<UpdaterState>({ status: 'idle' })
+  const isManualCheck = useRef(false)
 
   useEffect(() => { initialize() }, [])
 
-  const handleCheckUpdate = async () => {
-    if (!window.api?.updates?.check || checkingUpdate) return
-    setCheckingUpdate(true)
-    try {
-      await window.api.updates.check()
-    } finally {
-      setCheckingUpdate(false)
-    }
+  // updater:state 이벤트 구독
+  useEffect(() => {
+    if (!window.api?.updates?.onState) return
+    const unsub = window.api.updates.onState(state => {
+      setUpdater(state)
+      // 자동 체크(not-available/error)는 조용히 idle로
+      if (!isManualCheck.current && (state.status === 'not-available' || state.status === 'error')) {
+        setUpdater({ status: 'idle' })
+      }
+      if (state.status === 'not-available' || state.status === 'available' ||
+          state.status === 'downloaded' || state.status === 'error') {
+        isManualCheck.current = false
+      }
+    })
+    return unsub
+  }, [])
+
+  const handleCheckUpdate = () => {
+    if (!window.api?.updates?.check || updater.status === 'checking' || updater.status === 'downloading') return
+    isManualCheck.current = true
+    window.api.updates.check()
+  }
+
+  const handleDownload = () => {
+    if (!window.api?.updates?.download) return
+    window.api.updates.download()
+  }
+
+  const handleInstall = () => {
+    window.api?.updates?.install?.()
   }
 
   // ── 초기화 중 ────────────────────────────────────────────────────────────
@@ -99,16 +130,22 @@ export default function App() {
         {/* 사이드바 하단: 테마 토글 */}
         <div className="px-3 py-3 border-t border-bg-deep">
           <button
-            onClick={() => void handleCheckUpdate()}
-            disabled={checkingUpdate}
+            onClick={handleCheckUpdate}
+            disabled={updater.status === 'checking' || updater.status === 'downloading'}
             className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-muted
                        hover:bg-bg-deep hover:text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-            title="GitHub 최신 릴리스 확인"
+            title="업데이트 확인"
           >
             <span className="inline-flex w-5 shrink-0 items-center justify-center text-base leading-none">
-              {checkingUpdate ? '⟳' : '⬆'}
+              {updater.status === 'checking' || updater.status === 'downloading' ? '⟳' : '⬆'}
             </span>
-            <span className="flex-1 text-left">{checkingUpdate ? '업데이트 확인 중' : '업데이트 체크'}</span>
+            <span className="flex-1 text-left">
+              {updater.status === 'checking'   ? '확인 중...'
+              : updater.status === 'downloading' ? `다운로드 ${updater.percent ?? 0}%`
+              : updater.status === 'downloaded'  ? '설치 준비 완료'
+              : updater.status === 'available'   ? `v${updater.version} 업데이트`
+              : '업데이트 체크'}
+            </span>
           </button>
           <button
             onClick={toggleTheme}
@@ -130,6 +167,68 @@ export default function App() {
           </button>
         </div>
       </aside>
+
+      {/* ── 업데이트 모달 ────────────────────────────────────────────────── */}
+      {(updater.status === 'available' || updater.status === 'downloading' || updater.status === 'downloaded' || updater.status === 'error') && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-bg-card border border-bg-deep rounded-2xl shadow-2xl p-6 w-80 flex flex-col gap-4">
+            {updater.status === 'available' && (
+              <>
+                <p className="text-white font-bold text-base">업데이트가 있습니다</p>
+                <p className="text-muted text-sm">v{updater.version} 버전이 출시됐습니다. 지금 다운로드할까요?</p>
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => setUpdater({ status: 'idle' })}
+                    className="px-4 py-2 rounded-lg text-sm text-muted hover:bg-bg-deep transition-colors">
+                    나중에
+                  </button>
+                  <button onClick={handleDownload}
+                    className="px-4 py-2 rounded-lg text-sm bg-accent text-white hover:opacity-90 transition-opacity">
+                    다운로드
+                  </button>
+                </div>
+              </>
+            )}
+            {updater.status === 'downloading' && (
+              <>
+                <p className="text-white font-bold text-base">다운로드 중...</p>
+                <div className="w-full bg-bg-deep rounded-full h-2">
+                  <div className="bg-accent h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${updater.percent ?? 0}%` }} />
+                </div>
+                <p className="text-muted text-sm text-right">{updater.percent ?? 0}%</p>
+              </>
+            )}
+            {updater.status === 'downloaded' && (
+              <>
+                <p className="text-white font-bold text-base">설치 준비 완료</p>
+                <p className="text-muted text-sm">v{updater.version} 다운로드 완료. 앱을 재시작하면 자동 설치됩니다.</p>
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => setUpdater({ status: 'idle' })}
+                    className="px-4 py-2 rounded-lg text-sm text-muted hover:bg-bg-deep transition-colors">
+                    나중에
+                  </button>
+                  <button onClick={handleInstall}
+                    className="px-4 py-2 rounded-lg text-sm bg-accent text-white hover:opacity-90 transition-opacity">
+                    지금 재시작
+                  </button>
+                </div>
+              </>
+            )}
+            {updater.status === 'error' && (
+              <>
+                <p className="text-white font-bold text-base">업데이트 실패</p>
+                <p className="text-muted text-sm">{updater.error}</p>
+                <div className="flex justify-end">
+                  <button onClick={() => setUpdater({ status: 'idle' })}
+                    className="px-4 py-2 rounded-lg text-sm text-muted hover:bg-bg-deep transition-colors">
+                    확인
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── 메인 컨텐츠 ──────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-hidden">
