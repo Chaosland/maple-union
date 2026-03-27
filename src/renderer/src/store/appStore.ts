@@ -46,6 +46,40 @@ type CharLike = {
 }
 
 async function apiFetch(path: string): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  // Electron(EXE) 환경: /api 프록시 대신 main IPC 경로 사용
+  if (window.api?.nexon && path.startsWith('/api/nexon/maplestory/v1/')) {
+    try {
+      const url = new URL(path, 'http://localhost')
+      const pathname = url.pathname
+
+      if (pathname === '/api/nexon/maplestory/v1/id') {
+        const name = url.searchParams.get('character_name')
+        if (!name) return { ok: false, error: 'character_name 누락' }
+        return await window.api.nexon.getOcid(name)
+      }
+
+      if (pathname === '/api/nexon/maplestory/v1/character/basic') {
+        const ocid = url.searchParams.get('ocid')
+        if (!ocid) return { ok: false, error: 'ocid 누락' }
+        return await window.api.nexon.getCharacterBasic(ocid)
+      }
+
+      if (pathname === '/api/nexon/maplestory/v1/user/union') {
+        const ocid = url.searchParams.get('ocid')
+        if (!ocid) return { ok: false, error: 'ocid 누락' }
+        return await window.api.nexon.getUnionInfo(ocid)
+      }
+
+      if (pathname === '/api/nexon/maplestory/v1/user/union-raider') {
+        const ocid = url.searchParams.get('ocid')
+        if (!ocid) return { ok: false, error: 'ocid 누락' }
+        return await window.api.nexon.getUnionRaider(ocid)
+      }
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  }
+
   try {
     const res = await fetch(path, { headers: apiHeaders() })
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
