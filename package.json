@@ -49,11 +49,7 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "installerLanguages": [
-        "Korean"
-      ],
-      "language": "1042"
+      "createStartMenuShortcut": true
     },
     "directories": {
       "output": "release",
