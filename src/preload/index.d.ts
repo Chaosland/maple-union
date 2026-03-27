@@ -30,6 +30,7 @@ interface Window {
       getCharacterBasic(ocid: string): Promise<IpcResult>
       getUnionInfo(ocid: string): Promise<IpcResult>
       getUnionRaider(ocid: string): Promise<IpcResult>
+      loadAllCharacters(): Promise<IpcResult>
     }
     updates: {
       check(): Promise<UpdateCheckResult>

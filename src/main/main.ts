@@ -255,6 +255,18 @@ function registerIpcHandlers(): void {
     try { return { ok: true, data: await getUnionRaider(ocid) } }
     catch (e) { return { ok: false, error: String(e) } }
   })
+  // chars 네임스페이스가 누락된 구버전 preload와의 호환용 백업 채널
+  ipcMain.handle('nexon:loadAllCharacters', async (_e) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    try {
+      const chars = await loadAllCharacters((done, total) => {
+        win?.webContents.send('chars:progress', { done, total })
+      })
+      return { ok: true, data: chars }
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
 
   ipcMain.handle('updates:check', async () => {
     return checkForUpdates({

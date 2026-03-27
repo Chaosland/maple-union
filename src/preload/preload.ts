@@ -32,7 +32,8 @@ contextBridge.exposeInMainWorld('api', {
     getOcid:          (name: string): Promise<IpcResult> => ipcRenderer.invoke('nexon:ocid', name),
     getCharacterBasic:(ocid: string): Promise<IpcResult> => ipcRenderer.invoke('nexon:characterBasic', ocid),
     getUnionInfo:     (ocid: string): Promise<IpcResult> => ipcRenderer.invoke('nexon:unionInfo', ocid),
-    getUnionRaider:   (ocid: string): Promise<IpcResult> => ipcRenderer.invoke('nexon:unionRaider', ocid)
+    getUnionRaider:   (ocid: string): Promise<IpcResult> => ipcRenderer.invoke('nexon:unionRaider', ocid),
+    loadAllCharacters:(): Promise<IpcResult> => ipcRenderer.invoke('nexon:loadAllCharacters')
   },
   updates: {
     check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check')

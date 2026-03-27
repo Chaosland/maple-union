@@ -278,10 +278,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
           return
         }
         rawPayload = { ok: true, data: result.data }
+      } else if (window.api?.nexon?.loadAllCharacters) {
+        // 호환 경로: chars 네임스페이스가 없는 경우 nexon 백업 채널 사용
+        const result = await window.api.nexon.loadAllCharacters()
+        if (!result.ok) {
+          set({ error: result.error ?? '불러오기 실패' })
+          return
+        }
+        rawPayload = { ok: true, data: result.data }
       } else {
         // EXE에서 preload/window.api가 없는 비정상 상태면 즉시 명확한 에러 반환
         if (window.location?.protocol === 'file:') {
-          set({ error: 'Electron IPC(chars:loadAll)가 없습니다. 앱을 완전히 종료 후 다시 실행해 주세요.' })
+          const keys = window.api ? Object.keys(window.api).join(', ') : 'none'
+          set({ error: `Electron IPC가 비정상입니다(chars/loadAll 누락). protocol=${window.location.protocol}, apiKeys=${keys}` })
           return
         }
         // 웹/API 경로: /api/charlist
