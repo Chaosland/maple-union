@@ -36,6 +36,7 @@
   "build": {
     "appId": "com.maple.union.helper",
     "productName": "메이플 유니온 도우미",
+    "artifactName": "maple-union-setup-${version}.${ext}",
     "electronVersion": "29.4.6",
     "win": {
       "target": [
