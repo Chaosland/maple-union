@@ -21,7 +21,7 @@ const NAV_ITEMS: { id: Page; icon: string; label: string }[] = [
 ]
 
 export default function App() {
-  const { status, initialize } = useAppStore()
+  const { status, initialize, error, clearError } = useAppStore()
   const { theme, toggleTheme } = useTheme()
 
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -167,6 +167,35 @@ export default function App() {
           </button>
         </div>
       </aside>
+
+      {/* ── API 에러 모달 ────────────────────────────────────────────────── */}
+      {error && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70">
+          <div className="bg-bg-card border border-red-700/60 rounded-2xl shadow-2xl p-6 w-96 flex flex-col gap-4">
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-red-400 font-bold text-base">오류가 발생했습니다</p>
+              <button
+                onClick={clearError}
+                className="p-1 rounded-lg hover:bg-bg-deep text-muted hover:text-white transition-colors shrink-0"
+                title="닫기"
+              >
+                ✕
+              </button>
+            </div>
+            <pre className="text-red-300 text-xs whitespace-pre-wrap break-all bg-bg-deep rounded-lg p-3 max-h-60 overflow-y-auto">
+              {error}
+            </pre>
+            <div className="flex justify-end">
+              <button
+                onClick={clearError}
+                className="px-4 py-2 rounded-lg text-sm bg-red-700 hover:bg-red-600 text-white transition-colors"
+              >
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── 업데이트 모달 ────────────────────────────────────────────────── */}
       {(updater.status === 'available' || updater.status === 'downloading' || updater.status === 'downloaded' || updater.status === 'error') && (
