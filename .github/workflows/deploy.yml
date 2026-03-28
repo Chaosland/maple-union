@@ -32,7 +32,7 @@ jobs:
         run: npm ci
 
       - name: Build distributable
-        run: npm run dist
+        run: npm run dist -- --publish never
 
       - name: Upload workflow artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
