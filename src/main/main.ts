@@ -184,7 +184,7 @@ function registerIpcHandlers(): void {
     }
   })
   ipcMain.handle('updates:install', () => {
-    autoUpdater.quitAndInstall()
+    autoUpdater.quitAndInstall(true, true)
   })
 }
 
