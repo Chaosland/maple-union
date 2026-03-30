@@ -34,9 +34,11 @@ export const onRequestGet: PagesFunction = async (context) => {
   const listJson = await listRes.json() as {
     account_list: Array<{ character_list: Array<{ ocid: string }> }>
   }
-  const ocids = (listJson.account_list ?? []).flatMap(a => (a.character_list ?? []).map(c => c.ocid))
+  const entries = (listJson.account_list ?? []).flatMap((a, accountIndex) =>
+    (a.character_list ?? []).map(c => ({ ocid: c.ocid, accountIndex }))
+  )
 
-  if (ocids.length === 0) {
+  if (entries.length === 0) {
     return new Response(JSON.stringify({ ok: true, data: [] }), {
       headers: jsonHeaders
     })
@@ -44,10 +46,10 @@ export const onRequestGet: PagesFunction = async (context) => {
 
   // 5개씩 병렬 조회
   const results: unknown[] = []
-  for (let i = 0; i < ocids.length; i += BATCH) {
-    const chunk = ocids.slice(i, i + BATCH)
+  for (let i = 0; i < entries.length; i += BATCH) {
+    const chunk = entries.slice(i, i + BATCH)
     const settled = await Promise.allSettled(
-      chunk.map(ocid =>
+      chunk.map(({ ocid, accountIndex }) =>
         fetch(`${BASE}/maplestory/v1/character/basic?ocid=${encodeURIComponent(ocid)}`, {
           headers: {
             'x-nxopen-api-key': apiKey,
@@ -55,16 +57,17 @@ export const onRequestGet: PagesFunction = async (context) => {
             Pragma: 'no-cache'
           },
           cache: 'no-store'
-        }).then(r => r.json()).then(d => ({ ...(d as object), ocid }))
+        }).then(r => r.json()).then(d => ({ ...(d as object), ocid, accountIndex }))
       )
     )
     settled.forEach(r => { if (r.status === 'fulfilled') results.push(r.value) })
-    if (i + BATCH < ocids.length) await new Promise(r => setTimeout(r, 150))
+    if (i + BATCH < entries.length) await new Promise(r => setTimeout(r, 150))
   }
 
   // /id API로 한 번 더 OCID 정합성 체크
   const basics = results as Array<{
     ocid: string
+    accountIndex: number
     character_name?: string
     [k: string]: unknown
   }>
@@ -99,7 +102,7 @@ export const onRequestGet: PagesFunction = async (context) => {
         if (!basicRes.ok) return c
 
         const basicJson = await basicRes.json() as Record<string, unknown>
-        return { ...basicJson, ocid: idJson.ocid }
+        return { ...basicJson, ocid: idJson.ocid, accountIndex: c.accountIndex }
       })
     )
 
