@@ -147,7 +147,8 @@ function shouldUseSolution(candidate: SelectionSolution, current: SelectionSolut
 }
 
 export default function UnionPlacerScreen() {
-  const { savedCharacters, mainCharsByWorld, loadUnionData, unionRaider, unionInfo, unionLoading, selectedCharacter } = useAppStore()
+  const { savedCharacters: allCharacters, mainCharsByWorld, loadUnionData, unionRaider, unionInfo, unionLoading, selectedCharacter, selectedAccountIndex } = useAppStore()
+  const savedCharacters = useMemo(() => allCharacters.filter(c => (c.accountIndex ?? 0) === selectedAccountIndex), [allCharacters, selectedAccountIndex])
   const worlds = useMemo(() => [...new Set(savedCharacters.map(c => c.world_name).filter(w => w && !SPECIAL_WORLDS.has(w)))].sort(), [savedCharacters])
   const [selectedWorld, setSelectedWorld] = useState('')
   const [regionSelectMode, setRegionSelectMode] = useState(false)
