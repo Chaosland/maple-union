@@ -154,6 +154,7 @@ export const CLASS_ALIAS_MAP: Record<string, string> = {
   '위자드(얼,번)':          '아크메이지(얼,번)',   // 2차
   '아이스메이지(얼,번)':    '아크메이지(얼,번)',   // 3차
   '아이스라이트닝메이지':   '아크메이지(얼,번)',   // 3차 통칭
+  '아크메이지(썬,콜)':      '아크메이지(얼,번)',   // API 반환명 대응 (썬=번개, 콜=얼음)
   '클레릭':                 '비숍',               // 2차
   '프리스트':               '비숍',               // 3차
 
@@ -192,10 +193,13 @@ export function getClassEffects(className: string): UnionEffect[] {
   // 정확 매칭
   let def = CLASS_UNION_EFFECTS[resolved] ?? CLASS_UNION_EFFECTS[className]
   if (!def) {
-    // 부분 매칭 (e.g. "(불,독)" 포함 체크)
-    const key = Object.keys(CLASS_UNION_EFFECTS).find(
-      k => resolved.includes(k) || k.includes(resolved)
-    )
+    // 부분 매칭: 매핑 키가 입력 직업명에 포함될 때는 길이 차이가 2 이하인 경우만 허용
+    // (짧은 직업명 e.g. '아크'가 '아크메이지(썬,콜)' 같은 긴 이름에 잘못 매칭되는 것 방지)
+    const key = Object.keys(CLASS_UNION_EFFECTS).find(k => {
+      if (k.includes(resolved)) return true
+      if (resolved.includes(k) && Math.abs(k.length - resolved.length) <= 2) return true
+      return false
+    })
     if (key) def = CLASS_UNION_EFFECTS[key]
   }
   if (!def) return []
